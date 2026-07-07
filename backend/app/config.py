@@ -1,7 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
+
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode
 
 _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 
@@ -27,7 +29,12 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
 
     max_file_size_mb: int = 50
-    cors_origins: list[str] = ["http://localhost:5173"]
+    # NoDecode: without it pydantic-settings JSON-decodes list fields itself
+    # BEFORE the validator below runs, so a plain comma-separated value
+    # (CORS_ORIGINS=http://a,https://b) crashed at boot with a JSONDecodeError.
+    # With NoDecode the raw string reaches parse_cors_origins, which accepts
+    # both the comma-separated and JSON-array forms.
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
     app_env: str = "development"
     log_level: str = "INFO"
 
