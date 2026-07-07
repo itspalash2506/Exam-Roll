@@ -1,0 +1,3 @@
+# SPA fallback for Cloudflare Pages: serve index.html for every route so
+# React Router handles /upload, /history, /jobs/:id etc. on hard refresh.
+/*  /index.html  200

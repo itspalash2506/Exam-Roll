@@ -1,0 +1,85 @@
+/* ==========================================================================
+   ExamRoll Design Tokens — "Warm Editorial"
+   ==========================================================================
+   A deliberately non-generic system for a document-processing tool used by
+   college exam staff: warm off-white canvas, an old-style display serif
+   (Fraunces) paired with a characterful grotesque (Bricolage Grotesque),
+   deep teal-green as the primary accent, terracotta as a sparing highlight.
+   See /DESIGN.md at the project root for full rationale.
+
+   Self-hosted via @fontsource-variable so the app works fully offline.
+   ========================================================================== */
+
+@import '@fontsource-variable/fraunces/full.css';
+@import '@fontsource-variable/fraunces/full-italic.css';
+@import '@fontsource-variable/bricolage-grotesque/wght.css';
+
+:root {
+  /* ---- Color: warm editorial canvas ---- */
+  --color-canvas: #faf8f4;
+  --color-surface: #ffffff;
+  --color-line: #ede8e0; /* warm border — depth comes from borders, not shadow */
+  --color-ink: #1f1b16; /* warm near-black, primary text */
+  --color-muted: #6b6257; /* secondary text */
+
+  --color-primary: #1f5d4c; /* deep teal-green */
+  --color-primary-hover: #2e8168;
+  --color-secondary: #c4623f; /* terracotta — sparing use */
+
+  --color-success: #2e8168;
+  --color-warning: #b7791f;
+  --color-error: #b4442e;
+  --color-highlight: #f0e3c4; /* soft ochre — count rows / emphasis */
+
+  /* ---- Type ---- */
+  --font-display: 'Fraunces Variable', 'Fraunces', ui-serif, Georgia, serif;
+  --font-body: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+
+  /* ---- Shadow: one soft, warm, low token — never a harsh grey drop shadow ---- */
+  --shadow-warm: 0 1px 2px rgba(31, 27, 22, 0.04), 0 8px 24px rgba(31, 27, 22, 0.05);
+
+  /* ---- Motion (mirrors src/lib/motion.js — kept here for pure-CSS transitions) ---- */
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-entrance: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 0.18s;
+  --duration-base: 0.28s;
+  --duration-slow: 0.5s;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100vh;
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+    font-optical-sizing: auto;
+    font-variation-settings: 'SOFT' 28, 'WONK' 0;
+    letter-spacing: -0.02em;
+  }
+
+  ::selection {
+    background-color: var(--color-highlight);
+    color: var(--color-ink);
+  }
+}
+
+/* Respect prefers-reduced-motion globally for plain CSS transitions/animations.
+   Framer-motion components additionally check useReducedMotion() in JS. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,36 @@
+# Render Blueprint — deploys the FastAPI backend as a single free web service.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Secrets/config values are intentionally NOT committed (sync: false makes the
+# Render dashboard prompt for each value on first deploy). Set them there.
+#
+# VERIFY THIS in the Render dashboard: free web services sleep after ~15 min of
+# inactivity (cold start on next request) and have an EPHEMERAL disk — confirm
+# current free-tier behaviour, and confirm WebSocket support is still included.
+
+services:
+  - type: web
+    name: examroll-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        sync: false # e.g. llama-3.1-8b-instant
+      - key: DATABASE_URL
+        sync: false # e.g. sqlite+aiosqlite:///./examroll.db  (ephemeral on free tier)
+      - key: UPLOAD_DIR
+        sync: false # e.g. ./uploads  (ephemeral on free tier)
+      - key: MAX_FILE_SIZE_MB
+        sync: false # e.g. 50
+      - key: CORS_ORIGINS
+        sync: false # comma-separated; MUST include the deployed frontend origin
+      - key: APP_ENV
+        sync: false # production
+      - key: LOG_LEVEL
+        sync: false # INFO

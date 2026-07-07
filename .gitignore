@@ -1,0 +1,56 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+ENV/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.sqlite3
+
+# Alembic
+alembic/versions/
+
+# Node
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+*.local
+
+# Uploads (temp files) — both the repo-root and backend/ runtime locations
+# (an unanchored dir pattern matches at any depth; 'uploads/*' only matched root)
+uploads/
+test_output.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/

@@ -1,0 +1,23 @@
+@import './styles/theme.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .step-active {
+    @apply bg-primary text-white;
+  }
+  .step-done {
+    @apply bg-primary text-white;
+  }
+  .step-pending {
+    @apply bg-[#EDE8E0] text-muted;
+  }
+
+  /* Small caps for stepper / table-header labels */
+  .text-caps {
+    font-variant: small-caps;
+    letter-spacing: 0.03em;
+  }
+}
