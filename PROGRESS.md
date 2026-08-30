@@ -22,6 +22,7 @@
   - Dedupe rule: (roll_number, subject_code) is unique across the batch — repeats merged, count reported honestly in a new "Merging duplicates" stage (`DEDUPE_ACROSS_FILES` flag in processor.py). Sort rule: each subject column sorts ascending at export time only (numeric when all-digits, natural/alphanumeric otherwise); stored extraction order untouched.
 - [x] Phase 1 polish: Purely numeric subject code support & PIN filtering — 2026-07-07
 - [x] AI model swap: `llama-3.1-8b-instant` → `openai/gpt-oss-20b` — 2026-08-31
+- [x] Containerised backend (`backend/Dockerfile`) for Northflank — 2026-08-31
 - [x] Deployment prep: free-tier hosting config (Cloudflare Pages + Render) — 2026-07-08
   - Env-driven API/WS base (`VITE_API_BASE_URL`, single helper in client.js), CORS docs, boot-safe missing Groq key, startup dir creation for ephemeral disks, `render.yaml` + `.python-version` + SPA `_redirects`/`vercel.json`, git repo initialised. Dashboard walkthrough in `DEPLOYMENT.md`.
   - Enabled support for 5-to-6 digit purely numeric subject codes (e.g. `210236`) while filtering out address PIN codes (e.g. `482001`) and phone numbers using programmatic context checks.
@@ -80,6 +81,14 @@
 **Last Updated:** 2026-07-08 (Free-tier deployment prep — see DEPLOYMENT.md)
 
 ## Notes
+
+**Backend Dockerfile for Northflank (2026-08-31):**
+- `backend/Dockerfile` + `backend/.dockerignore`; **build context is `backend/`, not the repo root**. Motivation is the persistent volume: mounting one at `/data` fixes the ephemeral-disk limitation that wipes job history on every Render restart.
+- Multi-stage: deps are wheeled in a builder stage (which carries `build-essential`, since Python 3.14 is new enough that `uvloop`/`httptools` may lack manylinux wheels) then installed `--no-index` into a clean runtime image, so no compiler ships.
+- Base pinned to `python:3.14-slim-bookworm`, not `3.14-slim` — the unqualified tag follows Debian's newest release and would silently move the base OS on a rebuild.
+- Image defaults `DATABASE_URL=sqlite+aiosqlite:////data/examroll.db` and `UPLOAD_DIR=/data/uploads`. Verified the four-slash absolute form parses correctly through `Settings.sqlite_file_path` → `/data/examroll.db`, parent `/data`, which `ensure_runtime_dirs()` creates at boot. Runs non-root (uid 10001) with `/data` chowned, or the first upload fails EACCES.
+- `CMD ["sh","-c","exec uvicorn … --port ${PORT:-8000}"]`: shell form to expand `$PORT`, `exec` so uvicorn is PID 1 and receives SIGTERM (otherwise the shell swallows it and every graceful stop waits for SIGKILL).
+- **NOT yet built** — no Docker daemon available in the environment where this was written. Config assumptions are tested; the build itself is unverified. Build and run `/health` before trusting it.
 
 **OOM fix: pdfplumber per-page cache flush (2026-08-31):**
 - Live symptom was a browser CORS error, but the real failure was `502 Bad Gateway`. A 502 comes from Render's proxy, so FastAPI's `CORSMiddleware` never runs and the response carries no `Access-Control-Allow-Origin` — the browser then reports a CORS violation that masks the 502. **Diagnostic rule: a CORS error accompanied by a 5xx is never a CORS misconfiguration.**

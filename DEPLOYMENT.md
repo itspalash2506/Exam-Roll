@@ -199,6 +199,60 @@ and `CORS_ORIGINS`.
 - **Single instance, no auth** — do not put real student data behind a public
   URL long-term; this is a pilot.
 
+## Alternative backend host — Northflank (Docker)
+
+`backend/Dockerfile` builds the API as a container, so it runs on any Docker
+host. Northflank is the motivating target because it offers a **persistent
+volume**, which removes the biggest limitation of the Render free tier: the
+SQLite DB, uploads, and generated Excel files no longer vanish on restart.
+
+**Build context is `backend/`, not the repo root** — `backend/.dockerignore`
+then keeps the venv, local `*.db`, `uploads/`, and `.env` out of the image.
+
+```bash
+docker build -t examroll-api backend/
+docker run --rm -p 8000:8000 -v examroll-data:/data   -e GROQ_API_KEY=... -e CORS_ORIGINS=https://exam-roll.pages.dev   examroll-api
+```
+
+### Northflank service settings
+
+| Setting | Value |
+|---|---|
+| Type | Service → build from Git repo (Dockerfile) |
+| Dockerfile path | `backend/Dockerfile` |
+| Build context | `backend` |
+| Port | `8000`, HTTP, public |
+| Volume | mount at **`/data`** |
+
+The image defaults `DATABASE_URL` and `UPLOAD_DIR` into `/data`, so attaching
+the volume is all that's needed for persistence — but **if no volume is mounted
+at `/data` the app still starts and silently loses data on restart**, exactly
+like Render. Verify the mount before treating history as durable.
+
+Environment variables to set in the dashboard — same list as Step 2, minus the
+ones the image already defaults (`DATABASE_URL`, `UPLOAD_DIR`, `APP_ENV`,
+`LOG_LEVEL`):
+
+| Key | Value |
+|---|---|
+| `GROQ_API_KEY` | your key — dashboard only, never in the image |
+| `GROQ_MODEL` | `openai/gpt-oss-20b` |
+| `CORS_ORIGINS` | must include the frontend origin, e.g. `https://exam-roll.pages.dev` |
+| `MAX_FILE_SIZE_MB` | `50` |
+
+`PORT` is honoured if the platform injects it, defaulting to 8000 otherwise, so
+the same image runs unchanged on Northflank, Render, Fly, or locally.
+
+Finally, repoint the frontend: set `VITE_API_BASE_URL` to the Northflank URL in
+Cloudflare Pages and **trigger a rebuild** (Vite inlines it at build time), then
+add that same origin to `CORS_ORIGINS`.
+
+**VERIFY THIS:** Northflank's free-tier resource limits, whether persistent
+volumes are included on it, and WebSocket support — the progress checklist
+needs `wss://…/ws/jobs/{id}`.
+
+---
+
 ## Local development — unchanged
 
 `VITE_API_BASE_URL` unset → the Vite proxy forwards `/api` and `/ws` to

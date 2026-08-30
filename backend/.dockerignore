@@ -1,0 +1,43 @@
+# Build context is backend/, so these paths are relative to backend/.
+# Keeping the context small speeds up builds and — more importantly — stops
+# local secrets and multi-hundred-MB junk from being sent to the daemon or
+# baked into a layer.
+
+# Secrets — env vars come from the Northflank dashboard, never from the image.
+.env
+.env.*
+!.env.example
+
+# Local virtualenv (hundreds of MB, and Windows binaries that are useless in
+# a Linux image).
+venv/
+.venv/
+ENV/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime data: the local SQLite DB and previously uploaded/generated files.
+# These belong on the mounted volume at /data, never in the image.
+*.db
+*.sqlite3
+uploads/
+test_output.xlsx
+
+# Tests aren't needed at runtime. Remove this line if you want to run pytest
+# inside the built image in CI.
+tests/
+
+# Tooling / VCS
+.git/
+.gitignore
+alembic.ini
+Dockerfile
+.dockerignore
