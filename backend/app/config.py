@@ -35,6 +35,17 @@ class Settings(BaseSettings):
     # With NoDecode the raw string reaches parse_cors_origins, which accepts
     # both the comma-separated and JSON-array forms.
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
+    # Optional regex for origins that cannot be enumerated ahead of time —
+    # chiefly Cloudflare Pages preview deployments, which get a fresh
+    # per-build subdomain (https://<hash>.exam-roll.pages.dev) that no fixed
+    # list can cover. Empty (the default) disables it: exact-list matching only.
+    #
+    # SECURITY: allow_credentials is on, so ALWAYS anchor the pattern (^...$)
+    # and pin your own project's domain. A loose pattern like
+    # r"https://.*\.pages\.dev" would let ANY Cloudflare Pages site — anyone
+    # can deploy one — call this API with credentials. Correct form:
+    #   CORS_ORIGIN_REGEX=^https://([a-z0-9-]+\.)?exam-roll\.pages\.dev$
+    cors_origin_regex: str = ""
     app_env: str = "development"
     log_level: str = "INFO"
 

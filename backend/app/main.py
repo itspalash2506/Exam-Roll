@@ -39,6 +39,12 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_settings.cors_origins,
+    # None (not "") when unset. Starlette compiles any non-None value: current
+    # versions test it with .fullmatch() (an empty pattern then matches
+    # nothing), but older ones used .match(), where an empty pattern matches
+    # EVERY origin. starlette isn't pinned in requirements.txt, so normalise to
+    # None and the behaviour is correct on both.
+    allow_origin_regex=_settings.cors_origin_regex or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

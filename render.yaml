@@ -30,6 +30,8 @@ services:
         sync: false # e.g. 50
       - key: CORS_ORIGINS
         sync: false # comma-separated; MUST include the deployed frontend origin
+      - key: CORS_ORIGIN_REGEX
+        sync: false # optional; anchored regex for Cloudflare Pages preview builds
       - key: APP_ENV
         sync: false # production
       - key: LOG_LEVEL

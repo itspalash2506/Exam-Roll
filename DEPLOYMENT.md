@@ -70,6 +70,7 @@ Double-check on GitHub that **no `.env`, `venv/`, `node_modules/`, `*.db`, or
    | `UPLOAD_DIR` | `./uploads` |
    | `MAX_FILE_SIZE_MB` | `50` |
    | `CORS_ORIGINS` | `http://localhost:5173` for now — you'll append the frontend origin in Step 4 |
+   | `CORS_ORIGIN_REGEX` | leave empty (optional; see Step 4 for preview deployments) |
    | `APP_ENV` | `production` |
    | `LOG_LEVEL` | `INFO` |
 
@@ -138,12 +139,38 @@ non-commercial use — check the current terms fit a college pilot.
 Back in **Render → examroll-api → Environment**, update:
 
 ```
-CORS_ORIGINS=http://localhost:5173,https://examroll.pages.dev
+CORS_ORIGINS=http://localhost:5173,https://exam-roll.pages.dev
 ```
 
 (comma-separated, exact origin, no trailing slash, include `https://`). Save —
 Render restarts the service. Without this the browser blocks every API call
 from the deployed frontend.
+
+**Symptom if you skip it:** the browser reports *"No 'Access-Control-Allow-Origin'
+header is present"*. Note the API itself is fine — it returns 200 with
+`access-control-allow-credentials: true`; Starlette simply omits the
+`access-control-allow-origin` header when the request's origin isn't in the
+allowlist. Confirm the fix from a terminal:
+
+```bash
+curl -s -D - -o /dev/null -H "Origin: https://exam-roll.pages.dev" \
+  "https://examroll-api.onrender.com/api/v1/jobs?skip=0&limit=50"
+```
+
+### Preview deployments (optional)
+
+Cloudflare Pages gives every preview build its own subdomain
+(`https://<hash>.exam-roll.pages.dev`), which no fixed list can cover. To allow
+those too, set the optional companion variable:
+
+```
+CORS_ORIGIN_REGEX=^https://([a-z0-9-]+\.)?exam-roll\.pages\.dev$
+```
+
+Leave it empty to keep exact-list matching only. **Anchor it and pin your own
+domain** — `allow_credentials` is on, so an unanchored pattern such as
+`https://.*\.pages\.dev` would let any Cloudflare Pages site (anyone can deploy
+one) call this API with credentials.
 
 ---
 

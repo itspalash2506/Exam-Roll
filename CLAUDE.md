@@ -176,6 +176,7 @@ examroll/
 | UPLOAD_DIR         | Directory for temp uploads               |
 | MAX_FILE_SIZE_MB   | Max upload size in MB                    |
 | CORS_ORIGINS       | Allowed CORS origins (comma-separated)   |
+| CORS_ORIGIN_REGEX  | Optional anchored regex for preview origins |
 | APP_ENV            | development / production                 |
 | LOG_LEVEL          | INFO / DEBUG / WARNING                   |
 
