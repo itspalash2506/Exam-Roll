@@ -30,7 +30,7 @@ Every processed document is stored in a local SQLite database, giving the exam d
 | State       | TanStack Query v5, React Context                     |
 | Backend     | FastAPI 0.115, Python 3.11+, Uvicorn                 |
 | Database    | SQLite via SQLAlchemy 2.0 async ORM + aiosqlite      |
-| AI          | Groq API — llama-3.1-8b-instant                     |
+| AI          | Groq API — openai/gpt-oss-20b                       |
 | PDF         | pdfplumber (primary) + pypdf (fallback)              |
 | Excel I/O   | openpyxl                                             |
 | Real-time   | WebSocket (native FastAPI)                           |

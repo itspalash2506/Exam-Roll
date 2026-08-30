@@ -21,6 +21,7 @@
 - [x] Phase 1 polish: Multi-file aggregation + sorted subject-wise output — 2026-07-06
   - Dedupe rule: (roll_number, subject_code) is unique across the batch — repeats merged, count reported honestly in a new "Merging duplicates" stage (`DEDUPE_ACROSS_FILES` flag in processor.py). Sort rule: each subject column sorts ascending at export time only (numeric when all-digits, natural/alphanumeric otherwise); stored extraction order untouched.
 - [x] Phase 1 polish: Purely numeric subject code support & PIN filtering — 2026-07-07
+- [x] AI model swap: `llama-3.1-8b-instant` → `openai/gpt-oss-20b` — 2026-08-31
 - [x] Deployment prep: free-tier hosting config (Cloudflare Pages + Render) — 2026-07-08
   - Env-driven API/WS base (`VITE_API_BASE_URL`, single helper in client.js), CORS docs, boot-safe missing Groq key, startup dir creation for ephemeral disks, `render.yaml` + `.python-version` + SPA `_redirects`/`vercel.json`, git repo initialised. Dashboard walkthrough in `DEPLOYMENT.md`.
   - Enabled support for 5-to-6 digit purely numeric subject codes (e.g. `210236`) while filtering out address PIN codes (e.g. `482001`) and phone numbers using programmatic context checks.
@@ -79,6 +80,12 @@
 **Last Updated:** 2026-07-08 (Free-tier deployment prep — see DEPLOYMENT.md)
 
 ## Notes
+
+**AI model swap → openai/gpt-oss-20b (2026-08-31):**
+- `llama-3.1-8b-instant` is deprecated; the Groq model ID is now `openai/gpt-oss-20b` (131k context, 65k max output). Changed in `config.py` (default), `.env`, `.env.example`, `render.yaml`, `CLAUDE.md`, `DEPLOYMENT.md` — the model is read from `settings.groq_model` in exactly one place (`groq_client.get_groq_client()`), so no client code changed.
+- **No prompt or parsing changes were needed.** gpt-oss is a reasoning model, but Groq returns its chain-of-thought in a separate `reasoning` field on the message — `message.content` is still clean JSON, verified live. So `complete_json()`'s fence-stripping and the extractor's `[`…`]` slicing both work untouched. Note `reasoning_format` is NOT supported on gpt-oss (only `reasoning_effort`: low/medium/high, default medium) — do not add it.
+- **Do NOT raise `max_tokens` from 4096.** Reasoning tokens now count toward `completion_tokens`, which makes raising it tempting, but on the Groq free tier this org has an **8000 TPM limit and `max_tokens` counts against that budget** — a 16384 request returns HTTP 413 `rate_limit_exceeded` before the model even runs. Verified at 4096: classifier used 321 completion tokens, and the `extract_students_ai` fallback parsed 60/60 students from a full 8000-char snippet.
+- Verified: `classify_document()` through the real app path returns `attestation_sheet` @ 0.95 confidence with correct course/semester/subject names; 33/33 unit tests pass.
 
 **Purely numeric subject code support & PIN filtering (2026-07-07):**
 - Updated `_CODE_RE` and `_PAIR_RE` in `subject_utils.py` and `excel_extractor.py` to match 5-to-6 digit purely numeric subject codes (e.g. `210236`) in addition to standard alphanumeric codes.

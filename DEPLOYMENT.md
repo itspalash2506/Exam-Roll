@@ -65,7 +65,7 @@ Double-check on GitHub that **no `.env`, `venv/`, `node_modules/`, `*.db`, or
    | Key | Value |
    |---|---|
    | `GROQ_API_KEY` | your real key from https://console.groq.com — **only here, never in git** |
-   | `GROQ_MODEL` | `llama-3.1-8b-instant` |
+   | `GROQ_MODEL` | `openai/gpt-oss-20b` |
    | `DATABASE_URL` | `sqlite+aiosqlite:///./examroll.db` |
    | `UPLOAD_DIR` | `./uploads` |
    | `MAX_FILE_SIZE_MB` | `50` |

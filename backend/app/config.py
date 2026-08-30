@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # fresh hosted environment) — the pipeline already degrades gracefully to
     # rule-based extraction, and /health reports "not configured".
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "openai/gpt-oss-20b"
 
     # ── Storage (DEPLOYMENT NOTE) ────────────────────────────────────────────
     # Both paths are env-configurable and resolve relative to the process CWD

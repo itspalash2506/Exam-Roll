@@ -21,7 +21,7 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
-        sync: false # e.g. llama-3.1-8b-instant
+        sync: false # e.g. openai/gpt-oss-20b
       - key: DATABASE_URL
         sync: false # e.g. sqlite+aiosqlite:///./examroll.db  (ephemeral on free tier)
       - key: UPLOAD_DIR

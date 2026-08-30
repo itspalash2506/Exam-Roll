@@ -18,7 +18,7 @@ ExamRoll is a production-ready web application for college exam departments to:
 | Design      | "Warm editorial" system — Fraunces + Bricolage Grotesque (self-hosted variable fonts via `@fontsource-variable`), framer-motion — see `DESIGN.md` |
 | Backend     | FastAPI 0.115, Python 3.11+, Uvicorn             |
 | Database    | SQLite (dev) via SQLAlchemy 2.0 ORM              |
-| AI          | Groq API (llama-3.1-8b-instant)                 |
+| AI          | Groq API (openai/gpt-oss-20b)                   |
 | PDF         | pdfplumber, pypdf                                |
 | Excel I/O   | openpyxl                                         |
 | Real-time   | WebSocket (native FastAPI)                       |
@@ -171,7 +171,7 @@ examroll/
 | Variable           | Description                              |
 |--------------------|------------------------------------------|
 | GROQ_API_KEY       | Groq API key (required)                  |
-| GROQ_MODEL         | Model ID (default: llama-3.1-8b-instant) |
+| GROQ_MODEL         | Model ID (default: openai/gpt-oss-20b)   |
 | DATABASE_URL       | SQLAlchemy connection string             |
 | UPLOAD_DIR         | Directory for temp uploads               |
 | MAX_FILE_SIZE_MB   | Max upload size in MB                    |
