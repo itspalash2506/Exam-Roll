@@ -81,6 +81,12 @@
 
 ## Notes
 
+**OOM fix: pdfplumber per-page cache flush (2026-08-31):**
+- Live symptom was a browser CORS error, but the real failure was `502 Bad Gateway`. A 502 comes from Render's proxy, so FastAPI's `CORSMiddleware` never runs and the response carries no `Access-Control-Allow-Origin` — the browser then reports a CORS violation that masks the 502. **Diagnostic rule: a CORS error accompanied by a 5xx is never a CORS misconfiguration.**
+- Root cause: `_extract_with_pdfplumber` held pdfplumber's char-level object cache for every page alive until the whole document finished, so memory grew linearly with page count. Measured on the real `01_SRIT Regular 167.pdf` (2.6 MB, 168 pages): **601 MB peak heap** against Render free tier's **512 MB** → OOM kill mid-job → 502 + WebSocket drop → container restart → ephemeral disk wiped, so the just-created job 404'd and the job list came back `[]`.
+- Fix: `page.flush_cache()` + `page.get_textmap.cache_clear()` at the end of each page iteration. **601 MB → 12.2 MB (98% reduction)** with byte-identical output (167 students, 15 subjects, same roll order); 33/33 tests pass.
+- Not changed, but noted for later: `upload.py` reads every file fully into memory and hands the bytes to the background task, which holds them for the whole job even though `save_upload_to_job_dir` already wrote them to disk. Now the dominant term for large batches (~2.6 MB x N files); passing paths instead would remove it.
+
 **CORS: preview-deployment support via `CORS_ORIGIN_REGEX` (2026-08-31):**
 - Live deploy hit *"No 'Access-Control-Allow-Origin' header is present"* from `https://exam-roll.pages.dev`. Root cause was config, not code: the Render env vars are all `sync: false` and were never entered, so `CORS_ORIGINS` fell back to the code default `["http://localhost:5173"]`. Diagnostic worth remembering: the API returned **200 with `access-control-allow-credentials: true` but no `access-control-allow-origin`** — Starlette always emits ACAC (it's in `simple_headers`) and adds ACAO *only* on an allowlist match, so that exact header combination means "middleware is alive, origin not allowed", never "server down".
 - Added optional `CORS_ORIGIN_REGEX` (`config.py` → `main.py`'s `allow_origin_regex`) for Cloudflare Pages preview builds, which get a per-build subdomain no fixed list can cover. **Default empty = disabled**, so existing behaviour is unchanged.

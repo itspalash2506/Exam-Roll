@@ -132,6 +132,16 @@ def _extract_with_pdfplumber(file_bytes: bytes) -> list[str]:
 
             page_texts.append(clean_text(text))
 
+            # Release pdfplumber's per-page caches. Without this, the
+            # char-level object graph for every page stays alive until the
+            # whole document is done, so memory grows linearly with page
+            # count: a real 168-page attestation sheet peaked at ~600 MB,
+            # which the 512 MB free-tier container OOM-kills mid-job (the
+            # request then 502s and the ephemeral DB is wiped on restart).
+            # Flushing per page drops the same document to ~12 MB.
+            page.flush_cache()
+            page.get_textmap.cache_clear()
+
     return page_texts
 
 
