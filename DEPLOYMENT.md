@@ -194,10 +194,60 @@ and `CORS_ORIGINS`.
 
 - **Nothing persists**: SQLite DB, uploads, and generated files vanish on
   restart/sleep. Job history is best-effort. Phase 2 migrates to hosted
-  Postgres + object storage.
+  Postgres; object storage follows in Phase 3.
 - **Cold starts** after idle (~15 min) take up to a minute.
 - **Single instance, no auth** — do not put real student data behind a public
   URL long-term; this is a pilot.
+
+---
+
+## Phase 2 deployment changes
+
+Phase 2 (see `FUTURE.md` §9 Gate 0 and `PROGRESS.md`) changes this topology in two ways. Both are
+prerequisites for the work, not follow-ups, and both have lead time — start them early.
+
+### 1. A custom domain is required for authentication
+
+**This is not cosmetic.** Phase 2 auth uses an httpOnly session cookie with `SameSite=Lax`, which the
+browser only sends when the app and the API share a registrable domain. The current pair does not:
+`exam-roll.pages.dev` and `examroll-api.onrender.com` are separate registrable domains (`pages.dev`
+and `onrender.com` are both on the Public Suffix List), so they are **cross-site**. Deployed that way,
+every authenticated request returns 401 and every WebSocket handshake is rejected — silently, because
+the browser exposes almost nothing about a failed handshake.
+
+| Setting | Value |
+|---|---|
+| Frontend | `https://examroll.com` (apex, on Cloudflare Pages) |
+| Backend | `https://api.examroll.com` (CNAME to the backend host) |
+| `CORS_ORIGINS` | `https://examroll.com` |
+| `VITE_API_BASE_URL` | `https://api.examroll.com` |
+
+Different origins, but the *same site* — so `SameSite=Lax` works as designed, with full CSRF
+protection and no CSRF token to manage. If a custom domain is genuinely unavailable, the fallback is
+`SameSite=None` plus an explicit double-submit CSRF token; see `FUTURE.md` §7.1.
+
+### 2. Managed Postgres replaces SQLite
+
+Phase 2's tenancy migration adds a `NOT NULL org_id` column, which SQLite cannot add without a full
+table rebuild — so the storage move happens **before** auth rather than after it.
+
+- Provision Postgres on a free tier (Neon or Supabase).
+- Set `DATABASE_URL=postgresql+asyncpg://...` — already env-driven, so no code change beyond the
+  driver dependency.
+- Schema is created by `alembic upgrade head`, not by `create_all` + the boot-time `ALTER TABLE`,
+  which Phase 2 deletes.
+
+This also makes the backend **stateless**: with durable state in Postgres and source files deleted
+after extraction, the local disk becomes scratch space. The persistent-volume question below stops
+being architectural, and Render vs. Northflank becomes a reversible choice.
+
+### 3. Pick one deployment path
+
+`render.yaml` (`runtime: python`, `pip install -r requirements.txt`) and `backend/Dockerfile` are
+two divergent definitions of the same service, and they disagree: the Dockerfile sets
+`DATABASE_URL` and `APP_ENV=production` as image ENV, while `render.yaml` requires them to be typed
+by hand with `sync: false` — so a Render deploy that skips `APP_ENV` silently runs in development
+mode. Before Phase 2 ships, delete one or make them explicitly consistent.
 
 ## Alternative backend host — Northflank (Docker)
 

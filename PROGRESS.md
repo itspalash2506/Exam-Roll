@@ -1,8 +1,8 @@
 # ExamRoll — Progress Tracker
 
 **Project:** ExamRoll
-**Current Phase:** Phase 1
-**Overall Status:** 🟢 Phase 1 Complete
+**Current Phase:** Phase 2 — Production Foundation
+**Overall Status:** 🟡 Phase 1 complete; Phase 2 in progress — **not safe to publish** until Phase 2 closes (see `FUTURE.md`)
 
 ---
 
@@ -38,7 +38,7 @@
 - **File upload** — one or MANY PDF/XLSX files per job (up to 50 MB each) with per-file type + size validation; an invalid file rejects the batch with a message naming it
 - **Multi-file aggregation** — all files in a batch are extracted, students merged, subject maps unified (later files fill missing names; longer name wins on conflict, with a warning), and (roll, subject) pairs de-duplicated; per-file warnings ("File 2 (x.xlsx): no roll numbers found") surface in the AI Insight card
 - **Sorted output** — every subject column in the generated Excel is ascending (numeric sort for all-digit rolls, natural sort otherwise); DB keeps raw extraction order for traceability
-- **AI classification** — Groq Llama 3.1 identifies document type, course, semester, exam name, and all subject codes; gracefully falls back to rule-based results if Groq is unavailable
+- **AI classification** — Groq (`openai/gpt-oss-20b`) identifies document type, course, semester, exam name, and all subject codes; gracefully falls back to rule-based results if Groq is unavailable
 - **PDF extraction** — pdfplumber per-page roll-number extraction; pypdf fallback for scanned PDFs; handles RDVV attestation sheet format (one student per page)
 - **Excel extraction** — Auto-detects matrix format (subject codes as header columns) and flat-list format (comma/space-separated codes in one column)
 - **Subject detection** — Regex-based subject code detection (`MBAN301`, `CS401`, etc.) and purely numeric subject codes (e.g. `210236`), with programmatic context filtering to ignore address PIN codes and phone numbers.
@@ -51,34 +51,92 @@
 - **404 page** — Friendly not-found page for unknown routes
 - **Page titles** — Each page updates `document.title` (Dashboard / Upload / History / Job Detail / 404)
 - **Smooth transitions** — Fade-in animation on every page navigation
-- **33 passing tests** — PDF extractor, Excel extractor (both formats), subject detection, Excel generator, roll-number sorting (numeric + natural), multi-file merge/dedupe, numeric subject code parsing. (`tests/test_ai.py` and `tests/test_generators.py` are stale Prompt-1 scaffold stubs testing APIs that no longer exist — 4 failures that pre-date this work; run `pytest tests/test_extractors.py tests/test_multifile_and_sorting.py` for the real suite)
+- **33 passing / 4 failing tests** — `pytest -q` reports **4 failed, 33 passed**. Passing: PDF extractor, Excel extractor (both formats), subject detection, Excel generator, roll-number sorting (numeric + natural), multi-file merge/dedupe, numeric subject code parsing. Failing: `tests/test_ai.py` and `tests/test_generators.py`, stale Prompt-1 scaffold stubs testing APIs that no longer exist. A permanently-red suite is functionally no suite — Phase 2 WS-A deletes them and adds real coverage (`FUTURE.md` P0-3)
 
 ## Known Limitations
 
-- **One student per page** — PDF extraction expects the RDVV attestation format where each page belongs to one student; multi-student-per-page PDFs may only yield the first student per page
+- 🔴 **One student per page — CONFIRMED DATA LOSS, not a caveat** — `pdf_extractor.py:60` uses `.search()`, which returns only the first match, so a page listing N students yields exactly **one**. Reproduced: a 3-student page returns 1, and the 2 discarded roll numbers are then emitted as *subject columns*. Affects roll lists, attendance sheets and seating plans (30–60 students/page). Fixed in Phase 2 WS-B (`FUTURE.md` P0-1)
 - **ASCII-only roll numbers** — The roll-number regex (`\d{4,12}` or `[A-Z0-9]{5,15}`) may miss alphanumeric roll formats from other universities
 - **No authentication** — All data is visible to anyone with access to the running server
 - **SQLite only** — Not suitable for concurrent multi-user production use
 - **Local storage only** — Uploaded files and Excel outputs live in `uploads/` on disk; no cloud backup
 - **Groq dependency** — Without a valid API key the document is classified as "unknown" and no AI subject enrichment runs (rule-based extraction still works)
 - **Single-sheet output only** — The "per-subject sheets" output type shown in the UI is listed as coming soon
-- **Numeric code collision** — 5-to-6 digit numeric subject codes could conflict with 5-to-6 digit student roll numbers if the roll numbers are parsed as subject codes.
+- 🔴 **Numeric code collision — CONFIRMED, not hypothetical** — `_CODE_RE`'s `\d{5,6}` branch overlaps `_ROLL_RE`'s `\d{4,12}`, so 5–6 digit roll numbers (the norm in Indian universities) *are* parsed as subject codes and become columns in the delivered workbook. Reproduced. The `named if named else all_subjects` fallback masks it only when a `CODE - Name` pair was found. Fixed in Phase 2 WS-B (`FUTURE.md` P0-2)
+- 🔴 **Excel formula injection** — roll numbers and AI-supplied subject names starting with `=`, `+`, `-` or `@` are written as **live formulas** by openpyxl. A crafted upload produces a workbook that executes on the exam clerk's machine. Fixed in Phase 2 WS-C (`FUTURE.md` P0-5)
 
-## Next: Phase 2
+## Phase 2 Tasks — Production Foundation
 
-- User login + JWT authentication
-- Per-college role-based access control
-- PostgreSQL migration (replace SQLite)
-- PDF output with college letterhead
-- Word document (.docx) output
-- Print layout / print-to-PDF in browser
-- College branding / logo upload
-- Hall ticket generation
-- Seating arrangement generation
+Phase 2 is **production-readiness only; no new user-facing features.** It is `FUTURE.md` §9 Gate 0:
+the set of problems where shipping means leaking student data or delivering wrong answers. The six
+output/branding features previously listed here moved to Phases 3–4 (see Roadmap below).
+
+Six workstreams. **WS-A must complete before WS-D** — the tenancy migration needs Alembic and
+Postgres to exist, and auth built on a red test suite cannot be verified. The rest run in parallel.
+Full diagnosis and fix code for every item is in `FUTURE.md`.
+
+**WS-0 · Baseline**
+- [ ] Commit `FUTURE.md` + the 5 uncommitted backend modifications (streamed uploads, batch limits) as a clean baseline
+- [ ] Fix inverted SQL `echo` in `database.py:11` — currently logs student PII to production logs (P0-7)
+
+**WS-A · Foundation** *(blocks WS-D)*
+- [ ] Delete stale `tests/test_ai.py` + `tests/test_generators.py`; add `backend/pytest.ini` (P0-3)
+- [ ] Add `httpx`; first `TestClient` router tests — none exist today (P0-3)
+- [ ] Adopt Alembic: create `backend/alembic/`, add the dep, baseline migration; fix the sync driver in `alembic.ini` (P2-44)
+- [ ] Delete the hand-rolled `_add_missing_nullable_columns` boot migration (P2-44)
+- [ ] Migrate to managed Postgres (Neon/Supabase free tier); add `asyncpg` (P1-26, P2-26, P2-27)
+- [ ] GitHub Actions CI: `pytest` + `npm run build` on push (P3-63)
+
+**WS-B · Extraction correctness**
+- [ ] Per-line roll scan replacing `.search()` in `pdf_extractor.py:56-72` (P0-1)
+- [ ] Roll-number exclusion set + labelled-numeric-code allowlist in `subject_utils.py` (P0-2)
+- [ ] Low-yield warning when students found is far below page count (P0-1)
+- [ ] Regression tests: multi-student page, roll-as-subject, one-per-page still works
+
+**WS-C · Output and AI safety**
+- [ ] `_safe()` formula-injection guard on every user/AI sink in `excel_generator.py` (P0-5)
+- [ ] `app/services/ai/validation.py`; validate every AI-returned field (P0-10)
+- [ ] Prompt fencing; stop the AI inventing subject columns (P0-10)
+- [ ] Groq daily call budget — keep `max_tokens` at 4096, see the 8000 TPM note below (P0-9)
+
+**WS-D · Auth and tenancy** *(needs WS-A)*
+- [ ] Register the custom domain — app on apex, API on `api.` subdomain (hard prerequisite for the cookie design, has lead time)
+- [ ] `Organization` / `User` / `Session` models + `Job.org_id` NOT NULL (P0-4)
+- [ ] Alembic `0001_add_tenancy`: nullable → backfill legacy org → NOT NULL (P0-4)
+- [ ] `app/auth.py` — argon2id, session cookie, `current_user` / `require_org` (P0-4)
+- [ ] Filter **every** query by `org_id` in the WHERE clause; router-level dependency (P0-4)
+- [ ] `authorize_ws` — session cookie + `Origin` allowlist; delete the duplicate WS endpoint (P0-8, P1-23)
+- [ ] `slowapi` tiered rate limits keyed on org then IP; uvicorn `--proxy-headers` (P0-9)
+- [ ] Frontend `/login`, auth context, 401 handling
+- [ ] Cross-tenant isolation test matrix (`FUTURE.md` §7.6)
+
+**WS-E · Request hardening**
+- [ ] `BodySizeLimitMiddleware` — bodies currently hit disk before any size check (P0-6)
+- [ ] Disable `/docs`, `/redoc`, `/openapi.json` in production (P2-30)
+- [ ] Real `/health` DB check returning 503 — currently hardcoded `"connected"` (P2-32)
+- [ ] Security headers + `frontend/public/_headers`; drop `allow_credentials` until WS-D needs it (P1-25)
+
+**WS-F · Privacy and retention**
+- [ ] Retention janitor — the mechanism that makes a stated retention period true (P1-16)
+- [ ] `Organization.ai_processing_enabled` opt-out from third-party AI (§8)
+- [ ] Stop persisting `raw_text_sample` verbatim (§8)
+- [ ] `/privacy` + `/terms` routes, consent at upload, grievance contact — DPDP Act §5, §8(9) (§8)
+- [ ] Remove or hide the four advertised-but-nonexistent features (3 "Coming Soon" tiles + "Edit manually") (P3-70)
 
 ---
 
-**Last Updated:** 2026-07-08 (Free-tier deployment prep — see DEPLOYMENT.md)
+## Roadmap
+
+| Phase | Scope |
+|-------|-------|
+| **2** | **Production Foundation** — tests, Alembic, Postgres, extraction correctness, auth + tenancy, rate limiting, output sanitisation, privacy/retention. *No new features.* |
+| 3 | Object storage (S3/R2), durable queue, PDF output with college letterhead, Word (.docx) output, print layout |
+| 4 | College branding / logo upload, hall ticket generation, seating arrangement generation |
+| 5 | Marks/grades extraction, report cards, email delivery, admin dashboard, audit logs |
+
+---
+
+**Last Updated:** 2026-08-31 (Phase 2 defined and reconciled with `FUTURE.md` — see §11 of that file)
 
 ## Notes
 

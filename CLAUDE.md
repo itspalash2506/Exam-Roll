@@ -313,7 +313,7 @@ POST /api/v1/export → [excel_generator.py] → .xlsx blob → download
 - Target: frontend on Cloudflare Pages (Vercel fallback), backend on Render free tier — full dashboard walkthrough in `DEPLOYMENT.md`.
 - `src/api/client.js` is the single source of truth for the backend location: `VITE_API_BASE_URL` (build-time) prefixes the axios base URL and the WebSocket URL is derived from it (http→ws / https→wss); unset ⇒ relative paths through the Vite dev proxy, so local dev is unchanged. Axios timeout raised 60s→120s to survive Render cold starts.
 - `GROQ_API_KEY` now defaults to `""` so the app boots without it (pipeline already degrades to rule-based; `/health` reports "not configured").
-- `Settings.ensure_runtime_dirs()` (called in lifespan before `init_db`) creates `UPLOAD_DIR` and the SQLite file's parent dir, so a fresh ephemeral container boots cleanly. Ephemeral-disk caveat (DB/uploads/outputs wiped on restart) is documented in config.py, .env.example, and DEPLOYMENT.md — Phase 2 migrates to Postgres + object storage.
+- `Settings.ensure_runtime_dirs()` (called in lifespan before `init_db`) creates `UPLOAD_DIR` and the SQLite file's parent dir, so a fresh ephemeral container boots cleanly. Ephemeral-disk caveat (DB/uploads/outputs wiped on restart) is documented in config.py, .env.example, and DEPLOYMENT.md — **Phase 2 migrates to managed Postgres; object storage follows in Phase 3.** Once Postgres holds durable state and source files are deleted after extraction, local disk is scratch space and an ephemeral disk stops being a data-loss risk.
 - Deploy artifacts: `render.yaml` (Blueprint, `rootDir: backend`, env vars `sync: false` — values live only in the Render dashboard), `backend/.python-version` (3.14.5, matching the local venv), `frontend/public/_redirects` + `frontend/vercel.json` (SPA fallback), `frontend/.env.example`.
 - `.gitignore` fix: `uploads/*` was root-anchored and missed `backend/uploads/`; now `uploads/` (any depth).
 
@@ -325,12 +325,28 @@ POST /api/v1/export → [excel_generator.py] → .xlsx blob → download
 
 ## Future Phases
 
-| Phase | Feature                                              |
-|-------|------------------------------------------------------|
-| 2     | Auth (JWT), per-college data isolation               |
-| 3     | Cloud storage (S3/R2), async Celery workers          |
-| 4     | Marks extraction, grade calculation, report cards    |
-| 5     | Email delivery, admin dashboard, audit logs          |
+| Phase | Feature                                                                                  |
+|-------|------------------------------------------------------------------------------------------|
+| **2** | **Production Foundation** — test suite, Alembic, managed Postgres, extraction correctness, **session** auth + per-college data isolation, rate limiting, output sanitisation, privacy/retention. *No new features.* |
+| 3     | Object storage (S3/R2), durable queue replacing `BackgroundTasks`, PDF letterhead output, .docx output, print layout |
+| 4     | College branding upload, hall ticket generation, seating arrangement generation           |
+| 5     | Marks extraction, grade calculation, report cards, email delivery, admin dashboard, audit logs |
+
+**Phase 2 is `FUTURE.md` §9 Gate 0** — the 10 launch blockers found in the 2026-08-31 production
+audit. The task breakdown lives in `PROGRESS.md`; the finding-to-workstream map is `FUTURE.md` §11.
+Do not start Phase 3 work until Phase 2 closes: the app currently produces silently wrong output and
+has no authentication.
+
+Two corrections to earlier plans, both recorded in `FUTURE.md`:
+
+- **Auth is server-side sessions, not JWT.** Sessions are revocable ("log out everywhere", "this
+  account is compromised"); a stateless JWT needs a revocation list, which is a session table with
+  extra steps. Design in `FUTURE.md` §7. **This requires app and API to share a registrable domain**
+  (`examroll.com` + `api.examroll.com`) — on `pages.dev` + `onrender.com` they are cross-site and the
+  browser sends no cookie at all, on XHR or on the WebSocket handshake.
+- **Postgres moved into Phase 2**, ahead of auth. The tenancy migration adds a `NOT NULL org_id`, and
+  SQLite cannot alter a column to NOT NULL without a full table rebuild — doing it twice is waste.
+  Object storage stays in Phase 3.
 
 ---
 

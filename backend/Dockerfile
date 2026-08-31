@@ -68,10 +68,6 @@ RUN useradd --create-home --uid 10001 examroll \
     && chown -R examroll:examroll /data /app
 USER examroll
 
-# Declares the intent; Northflank still needs the volume attached at /data in
-# the service config for data to actually persist across restarts.
-VOLUME ["/data"]
-
 EXPOSE 8000
 
 # Uses the app's own /health endpoint. Written with urllib rather than curl so

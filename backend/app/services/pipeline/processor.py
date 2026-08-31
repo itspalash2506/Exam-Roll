@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import traceback
 
 from sqlalchemy import select
@@ -9,7 +10,7 @@ from app.models.db_models import ExtractedData, Job
 from app.schemas.schemas import StudentRecord, SubjectEntry
 from app.services.ai.classifier import classify_document
 from app.services.ai.extractor import extract_students_ai, validate_extraction
-from app.utils.file_utils import detect_file_type, validate_file_size
+from app.utils.file_utils import detect_file_type, validate_size_bytes
 from app.utils.subject_utils import sort_subjects
 from app.websocket_manager import manager
 
@@ -159,7 +160,7 @@ class DocumentProcessor:
     async def process(
         self,
         job_id: str,
-        files: list[tuple[str, bytes]],
+        files: list[tuple[str, str]],
         db_session,
         ws_manager,
     ) -> None:
@@ -225,10 +226,16 @@ class DocumentProcessor:
         # ── STAGE: validating ────────────────────────────────────────────────
         await _emit("validating", "active")
 
+        # files is [(original_name, path_on_disk)] — the bytes stay on disk and
+        # are read one file at a time in the reading stage below, so at most one
+        # document is resident at any moment.
         per_file_types: list[str] = []
-        for name, data in files:
+        file_sizes: list[int] = []
+        for name, path in files:
             per_file_types.append(detect_file_type(name))
-            validate_file_size(data, settings.max_file_size_mb)
+            size = os.path.getsize(path)
+            file_sizes.append(size)
+            validate_size_bytes(size, settings.max_file_size_mb)
 
         result = await db_session.execute(select(Job).where(Job.id == job_id))
         job = result.scalar_one_or_none()
@@ -238,7 +245,7 @@ class DocumentProcessor:
 
         job.status = "processing"
         job.file_type = per_file_types[0] if len(set(per_file_types)) == 1 else "mixed"
-        total_mb = sum(len(data) for _, data in files) / (1024 * 1024)
+        total_mb = sum(file_sizes) / (1024 * 1024)
         await db_session.flush()
         if n_files == 1:
             validate_detail = f"{per_file_types[0].upper()} · {total_mb:.1f} MB"
@@ -256,7 +263,7 @@ class DocumentProcessor:
 
         per_file_results: list[dict] = []
         read_failures: list[str] = []
-        for i, (name, data) in enumerate(files, start=1):
+        for i, (name, path) in enumerate(files, start=1):
             file_type = per_file_types[i - 1]
             if n_files > 1:
                 await _emit(
@@ -264,8 +271,11 @@ class DocumentProcessor:
                     detail=f"File {i} of {n_files} · {name}",
                 )
             try:
+                # Read and parse in one worker thread, then drop the bytes
+                # before moving to the next file. Holding the whole batch was
+                # what made peak memory scale with batch size.
                 students, subjects, sample, doc_count = await asyncio.to_thread(
-                    _run_extractor, file_type, data, name
+                    _read_and_extract, file_type, path, name
                 )
             except Exception as exc:
                 # One unreadable file must not abort the batch — record and go on.
@@ -520,6 +530,23 @@ async def process_job(job_id: str) -> None:
 
 
 # ── Sync helper (runs in a thread via asyncio.to_thread) ─────────────────────
+
+def _read_and_extract(
+    file_type: str, path: str, filename: str
+) -> tuple[list[StudentRecord], dict[str, str], str, int]:
+    """Read one file off disk, extract from it, and release the bytes.
+
+    Runs in a worker thread. The `del` is deliberate: it drops the document's
+    bytes at the end of THIS call rather than at the end of the batch loop, so
+    the next file starts from a clean baseline.
+    """
+    with open(path, "rb") as fh:
+        file_bytes = fh.read()
+    try:
+        return _run_extractor(file_type, file_bytes, filename)
+    finally:
+        del file_bytes
+
 
 def _run_extractor(
     file_type: str, file_bytes: bytes, filename: str

@@ -4,15 +4,19 @@
 
 ExamRoll is a web application built for college exam departments to automate the tedious process of converting attestation sheets into organized, styled Excel reports. Upload a PDF attestation sheet or an Excel roll list, and ExamRoll's AI pipeline extracts every student's roll number and subject enrollments — then generates a publication-ready, subject-wise Excel workbook in seconds.
 
-The backend uses Groq's Llama model to classify the document type and enrich subject metadata, while robust rule-based extractors handle the actual data parsing. If the AI is unavailable, the pipeline falls back gracefully to rule-based extraction, ensuring the app is always usable. Real-time progress updates are delivered to the browser via WebSocket so users can watch each processing step live.
+The backend uses Groq's `openai/gpt-oss-20b` model to classify the document type and enrich subject metadata, while robust rule-based extractors handle the actual data parsing. If the AI is unavailable, the pipeline falls back gracefully to rule-based extraction, ensuring the app is always usable. Real-time progress updates are delivered to the browser via WebSocket so users can watch each processing step live.
 
-Every processed document is stored in a local SQLite database, giving the exam department a searchable history of all uploads with the ability to re-download any previously generated Excel file. The entire stack runs locally on Windows with two simple terminal commands — no cloud account required except for the free Groq API key.
+Every processed document is stored in a SQLite database, giving the exam department a history of uploads with the ability to re-download any previously generated Excel file. The stack runs locally on Windows with two simple terminal commands; the only external service is the free Groq API.
+
+> **Note on data handling.** AI classification sends a sample of the uploaded document — which contains student roll numbers — to Groq's API in the United States. It is not processed locally. Set `GROQ_API_KEY=""` to disable AI entirely and use rule-based extraction only. When deployed to a free-tier host with an ephemeral disk, job history is best-effort and does not survive a restart (see `DEPLOYMENT.md`).
+
+> ⚠️ **Pre-production.** ExamRoll is Phase 1 complete and **not yet safe to publish publicly**: it has no authentication, and PDF pages listing multiple students currently yield only the first. Both are being fixed in Phase 2 — see `FUTURE.md` for the full audit and `PROGRESS.md` for the task list.
 
 ## Features
 
 - **PDF Attestation Sheet processing** — Extracts roll numbers and subject codes page-by-page from RDVV-format attestation PDFs
 - **Excel file processing** — Auto-detects matrix format (subject codes as column headers) and flat-list format (paper codes in one column)
-- **AI-powered document classification** — Identifies document type, course, semester, and exam name using Groq Llama 3.1
+- **AI-powered document classification** — Identifies document type, course, semester, and exam name using Groq (`openai/gpt-oss-20b`)
 - **Subject name enrichment** — Merges AI-detected subject names with rule-based code detection
 - **Real-time progress bar** — WebSocket-driven live updates through every processing step
 - **AI Insight card** — Shows document metadata, detected subjects, and confidence score after upload
@@ -174,9 +178,14 @@ examroll/
 
 ## Roadmap
 
-| Phase | Features                                                                 |
-|-------|--------------------------------------------------------------------------|
-| 2     | User login + roles (JWT), per-college data isolation, PostgreSQL          |
-| 3     | PDF output with college letterhead, Word document output, print layout   |
-| 4     | College branding upload, hall ticket generation, seating arrangement     |
-| 5     | Marks/grades extraction, report cards, email delivery, admin dashboard   |
+| Phase | Features                                                                                     |
+|-------|----------------------------------------------------------------------------------------------|
+| **2** | **Production Foundation** — user login + roles (**session** auth), per-college data isolation, PostgreSQL, extraction correctness, rate limiting, privacy/retention. *No new features.* |
+| 3     | Object storage, durable job queue, PDF output with college letterhead, Word document output, print layout |
+| 4     | College branding upload, hall ticket generation, seating arrangement                          |
+| 5     | Marks/grades extraction, report cards, email delivery, admin dashboard, audit logs             |
+
+Phase 2 is the set of launch blockers from the production audit in `FUTURE.md`; the task breakdown
+is in `PROGRESS.md`. Auth is server-side sessions rather than JWT (revocability — see `FUTURE.md` §7),
+and PostgreSQL lands *before* auth because the tenancy migration adds a `NOT NULL` column that SQLite
+cannot add without a table rebuild.

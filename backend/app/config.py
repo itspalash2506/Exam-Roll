@@ -28,7 +28,15 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./examroll.db"
     upload_dir: str = "./uploads"
 
+    # Per-file ceiling. With uploads streamed to disk this no longer drives
+    # upload memory, but it still bounds EXTRACTION: one file's bytes plus the
+    # parser's working set are resident while that file is processed.
     max_file_size_mb: int = 50
+    # Batch ceilings. Files are processed one at a time, so these bound disk
+    # and total work rather than peak RAM — but without them a caller can queue
+    # an unbounded number of files and exhaust the ephemeral disk instead.
+    max_batch_files: int = 10
+    max_total_batch_mb: int = 150
     # NoDecode: without it pydantic-settings JSON-decodes list fields itself
     # BEFORE the validator below runs, so a plain comma-separated value
     # (CORS_ORIGINS=http://a,https://b) crashed at boot with a JSONDecodeError.
@@ -65,6 +73,10 @@ class Settings(BaseSettings):
     @property
     def max_file_size_bytes(self) -> int:
         return self.max_file_size_mb * 1024 * 1024
+
+    @property
+    def max_total_batch_bytes(self) -> int:
+        return self.max_total_batch_mb * 1024 * 1024
 
     @property
     def sqlite_file_path(self) -> Path | None:
