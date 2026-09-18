@@ -73,6 +73,7 @@ Double-check on GitHub that **no `.env`, `venv/`, `node_modules/`, `*.db`, or
    | `CORS_ORIGIN_REGEX` | leave empty (optional; see Step 4 for preview deployments) |
    | `APP_ENV` | `production` |
    | `LOG_LEVEL` | `INFO` |
+   | `SQL_ECHO` | `false` — **never `true` in production** (the app refuses to start; it would log student PII) |
 
 4. Deploy. When it's live, open `https://<your-service>.onrender.com/health` —
    expect `{"status":"ok", ..., "groq":"configured"}`. Note the service URL.
@@ -112,6 +113,7 @@ Double-check on GitHub that **no `.env`, `venv/`, `node_modules/`, `*.db`, or
    | Key | Value |
    |---|---|
    | `VITE_API_BASE_URL` | `https://<your-service>.onrender.com` (from Step 2, no trailing slash) |
+   | `VITE_PILOT_NOTICE` | Pilot banner text, e.g. `Pilot instance — SRIT Exam Centre` (empty = hidden) |
 
    Vite bakes this in at build time — changing it later requires a **rebuild**,
    not just a redeploy.

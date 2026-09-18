@@ -36,3 +36,5 @@ services:
         sync: false # production
       - key: LOG_LEVEL
         sync: false # INFO
+      - key: SQL_ECHO
+        sync: false # false — MUST be false in production (logs student PII)

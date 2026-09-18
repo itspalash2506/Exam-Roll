@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode
 
 _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -56,6 +56,22 @@ class Settings(BaseSettings):
     cors_origin_regex: str = ""
     app_env: str = "development"
     log_level: str = "INFO"
+    # SQL echo — useful in development for debugging queries; MUST be False in
+    # production because it logs every SQL statement, including student PII.
+    sql_echo: bool = False
+
+    @model_validator(mode="after")
+    def never_echo_in_production(self) -> "Settings":
+        """Refuse to boot if sql_echo is enabled in production — it would log
+        every SQL statement, including student roll numbers and names, to the
+        application log stream."""
+        if self.sql_echo and self.app_env == "production":
+            raise ValueError(
+                "sql_echo must not be enabled in production (APP_ENV=production). "
+                "SQL echo logs every query, including student PII, to the "
+                "application log stream."
+            )
+        return self
 
     @field_validator("cors_origins", mode="before")
     @classmethod

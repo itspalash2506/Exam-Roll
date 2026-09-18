@@ -179,12 +179,14 @@ examroll/
 | CORS_ORIGIN_REGEX  | Optional anchored regex for preview origins |
 | APP_ENV            | development / production                 |
 | LOG_LEVEL          | INFO / DEBUG / WARNING                   |
+| SQL_ECHO           | false (default) — MUST be false in production; app refuses to start if true+production (PII leak prevention) |
 
 Frontend (build-time, Vite):
 
 | Variable           | Description                              |
 |--------------------|------------------------------------------|
 | VITE_API_BASE_URL  | Deployed backend origin (e.g. https://examroll-api.onrender.com). Unset in local dev → Vite proxy to localhost:8000. WS URL is derived from it in `src/api/client.js`. |
+| VITE_PILOT_NOTICE  | Pilot banner text shown on the Dashboard (e.g. "Pilot instance — SRIT Exam Centre"). Empty/unset = hidden. |
 
 ---
 

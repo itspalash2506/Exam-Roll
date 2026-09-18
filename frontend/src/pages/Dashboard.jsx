@@ -67,9 +67,16 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
+      {/* Pilot notice banner (hidden when VITE_PILOT_NOTICE is empty/unset) */}
+      {import.meta.env.VITE_PILOT_NOTICE && (
+        <div className="rounded-xl border border-warning/30 bg-highlight px-5 py-3 text-small font-medium text-ink">
+          {import.meta.env.VITE_PILOT_NOTICE}
+        </div>
+      )}
+
       {/* Welcome header */}
       <div>
-        <h1 className="font-display text-h1 font-medium text-ink">Welcome to ExamRoll</h1>
+        <h1 className="font-display text-h1 font-medium text-ink">Dashboard</h1>
         <p className="mt-1 text-small text-muted">
           Upload attestation sheets to auto-extract roll numbers and generate styled Excel reports.
         </p>
