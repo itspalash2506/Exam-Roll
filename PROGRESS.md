@@ -88,12 +88,23 @@ Full diagnosis and fix code for every item is in `FUTURE.md`.
 - `npm run build` succeeds.
 
 **WS-A · Foundation** *(blocks WS-D)*
-- [ ] Delete stale `tests/test_ai.py` + `tests/test_generators.py`; add `backend/pytest.ini` (P0-3)
-- [ ] Add `httpx`; first `TestClient` router tests — none exist today (P0-3)
+- [x] Delete stale `tests/test_ai.py` + `tests/test_generators.py`; add `backend/pytest.ini` (P0-3) — 2026-09-18
+- [x] Add `httpx`; first `TestClient` router tests — none exist today (P0-3) — 2026-09-18
 - [ ] Adopt Alembic: create `backend/alembic/`, add the dep, baseline migration; fix the sync driver in `alembic.ini` (P2-44)
 - [ ] Delete the hand-rolled `_add_missing_nullable_columns` boot migration (P2-44)
 - [ ] Migrate to managed Postgres (Neon/Supabase free tier); add `asyncpg` (P1-26, P2-26, P2-27)
-- [ ] GitHub Actions CI: `pytest` + `npm run build` on push (P3-63)
+- [x] GitHub Actions CI: `pytest` + `npm run build` on push (P3-63) — 2026-09-18
+
+**P02 notes (2026-09-18):**
+- Deleted stale `tests/test_ai.py` and `tests/test_generators.py` (which targeted nonexistent APIs and caused 4 baseline failures).
+- Added `backend/pytest.ini` (`asyncio_mode = auto`, `testpaths = tests`, `pythonpath = .`, `addopts = -q --strict-markers`).
+- Pinned `httpx>=0.27.0` in `backend/requirements.txt` (`pytest` and `pytest-asyncio` were already pinned).
+- Updated `backend/.python-version` from `3.14.5` to `3.12` (Dockerfile base image step skipped because Dockerfile was deleted in commit 3bfab1e).
+- Added `backend/tests/conftest.py` providing session-scoped async test DB (SQLite file in temp directory), upload directory isolation, `AsyncClient` fixture with inline `BackgroundTasks`, `make_pdf_pages` helper fixture, and deterministic `classify_document` mock.
+- Added `backend/tests/test_routers.py` with 10 test cases covering: `GET /health` (200), `POST /api/v1/upload` (happy path, .xls rejected, >max_file_size rejected, >max_batch_files rejected), `GET /api/v1/jobs` (200), `GET /api/v1/jobs/{id}` (404), `DELETE /api/v1/jobs/{id}` (204, verified 404 on subsequent get), `POST /api/v1/export` (happy path, valid xlsx bytes), `GET /api/v1/export/{job}/download/{file}` (404).
+- Test count: **48 passed, 0 failed** in 0.88s (eliminated 4 stale failures, 38 existing passed, 10 router tests passed).
+- Added `.github/workflows/ci.yml` running Python 3.12 pytest in `backend/` and Node 20 `npm ci && npm run build` in `frontend/` on push and PR with pip/npm caching.
+- `npm run build` succeeds cleanly.
 
 **WS-B · Extraction correctness**
 - [ ] Per-line roll scan replacing `.search()` in `pdf_extractor.py:56-72` (P0-1)
