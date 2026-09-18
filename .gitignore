@@ -55,3 +55,7 @@ desktop.ini
 # Logs
 *.log
 logs/
+
+# Real attestation sheets — student PII, never commit
+*.pdf
+!frontend/**/*.pdf

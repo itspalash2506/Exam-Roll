@@ -5,6 +5,7 @@ from io import BytesIO
 import openpyxl
 
 from app.schemas.schemas import StudentRecord
+from app.utils.student_utils import derive_admission_year
 from app.utils.subject_utils import extract_all_subjects, normalize_subject_name
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,16 @@ def _extract_format_a(
             if idx < len(row) and _truthy(row[idx])
         ]
         if enrolled:
-            students.append(StudentRecord(roll_number=roll, subjects=sorted(enrolled)))
+            students.append(
+                StudentRecord(
+                    roll_number=roll,
+                    subjects=sorted(enrolled),
+                    admission_year=derive_admission_year(roll),
+                    # Spreadsheet layouts carry no status column; the `regular`
+                    # default is therefore never explicit and must be warned on.
+                    status_explicit=False,
+                )
+            )
 
     # Subject map: codes are known from the header; names are empty (no name row present)
     subjects: dict[str, str] = {code: "" for code in header_codes}
@@ -161,19 +171,32 @@ def _extract_format_b(
             continue
 
         cell_text = _cell_str(row, paper_col) if paper_col < len(row) else ""
-        codes = _CODE_RE.findall(cell_text)
+        # P0-2 — the student's own roll must never be read back as one of their
+        # subject codes, which happens whenever the paper cell repeats it.
+        codes = [c for c in _CODE_RE.findall(cell_text) if c != roll]
         if not codes:
             continue
 
-        students.append(StudentRecord(roll_number=roll, subjects=sorted(set(codes))))
+        students.append(
+            StudentRecord(
+                roll_number=roll,
+                subjects=sorted(set(codes)),
+                admission_year=derive_admission_year(roll),
+                status_explicit=False,
+            )
+        )
 
         # Extract subject names from cell text if present
-        cell_subjects = extract_all_subjects(cell_text)
+        cell_subjects = extract_all_subjects(cell_text, exclude={roll})
         for code, name in cell_subjects.items():
             if name:
                 all_subjects.setdefault(code, name)
             else:
                 all_subjects.setdefault(code, "")
+
+    all_rolls = {s.roll_number for s in students}
+    for roll in all_rolls:
+        all_subjects.pop(roll, None)
 
     return students, all_subjects
 
@@ -218,7 +241,15 @@ def _find_paper_col(header_row: list[str], data_rows: list[tuple]) -> int | None
 
 
 def _is_subject_code(val: str) -> bool:
-    return bool(re.fullmatch(r"[A-Z]{2,6}\d{3,4}|\d{5,6}", val.strip()))
+    """True for an unambiguous alphanumeric subject code.
+
+    P0-2 — a bare 5-6 digit value is indistinguishable from a roll number or a
+    session header, so `202401` in a header row became a subject column. Numeric
+    codes now need positive evidence, which a lone header cell cannot provide;
+    they still reach the subject map through `CODE - Name` pairs and explicit
+    subject/paper/course labels in `extract_all_subjects`.
+    """
+    return bool(re.fullmatch(r"[A-Z]{2,6}\d{3,4}", val.strip()))
 
 
 def _truthy(val) -> bool:

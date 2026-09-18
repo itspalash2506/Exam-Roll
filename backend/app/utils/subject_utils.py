@@ -1,11 +1,37 @@
 import re
 from app.schemas.schemas import StudentRecord, SubjectEntry
 
-# Matches Indian college subject codes: 2-6 uppercase letters + 3-4 digits (e.g. MBAN301, CS401), or 5-6 digit numeric codes
+# P0-2 — a 5-6 digit roll number matches the same shape as a numeric subject
+# code, so a single pattern cannot tell them apart. Alphanumeric codes are
+# unambiguous and always accepted; purely numeric codes need positive evidence.
+_ALPHA_CODE_RE = re.compile(r"\b([A-Z]{2,6}\d{3,4})\b")
+
+# Positive evidence #1: an explicit subject/paper/course label.
+_NUMERIC_CODE_RE = re.compile(
+    r"(?:subject|paper|course)\s*(?:code)?\s*[:\-]?\s*(\d{5,6})\b", re.IGNORECASE
+)
+
+# Kept for detect_subject_code_pattern and the excel extractor's cell scan,
+# where a numeric code is only ever accepted via _PAIR_RE or an explicit label.
 _CODE_RE = re.compile(r"\b([A-Z]{2,6}\d{3,4}|\d{5,6})\b")
 
-# Matches "CODE - Name" or "CODE: Name" on a single line
-_PAIR_RE = re.compile(r"\b([A-Z]{2,6}\d{3,4}|\d{5,6})\s*[-:]\s*([^\n\r]+)", re.MULTILINE)
+# Matches "CODE - Name" or "CODE: Name" on a single line. P2-22 — the name is
+# non-greedy and stops at the next code, so "MBAN301 - Maths MBAN302 - Physics"
+# yields two pairs instead of one swallowing the other.
+#
+# The separator uses [ \t] rather than \s: \s matches a newline, so a line
+# ending in a dash ("PH: 47175-") bound itself to the whole of the next line
+# and turned a phone number into a named subject.
+_PAIR_RE = re.compile(
+    r"\b([A-Z]{2,6}\d{3,4}|\d{5,6})[ \t]*[-:][ \t]*(.+?)(?=\s+(?:[A-Z]{2,6}\d{3,4})\b|$)",
+    re.MULTILINE,
+)
+
+# Numeric matches preceded by one of these labels are addresses or contact
+# numbers, never subject codes. "ph" covers the "PH: 47175" form on letterheads.
+_LABEL_CONTEXT_RE = re.compile(
+    r"(?:pin|ph|phone|mob(?:ile)?|tel)\b[^a-z0-9]{0,4}$", re.IGNORECASE
+)
 
 _SPECIAL_RE = re.compile(r"[^\w\s&/()\-,.]")
 _MULTI_SPACE_RE = re.compile(r"\s+")
@@ -56,42 +82,55 @@ def detect_subject_code_pattern(text: str) -> str:
     return rf"{re.escape(top)}\d+"
 
 
-def extract_all_subjects(text: str) -> dict[str, str]:
+def _is_address_number(text: str, start: int) -> bool:
+    """True when a numeric match is preceded by a PIN/phone/mobile/tel label."""
+    return bool(_LABEL_CONTEXT_RE.search(text[max(0, start - 20):start]))
+
+
+def extract_all_subjects(
+    text: str, exclude: set[str] | None = None
+) -> dict[str, str]:
     """Return {code: name} for all subject codes found in text.
 
-    Named subjects come from 'CODE - Name' / 'CODE: Name' patterns.
-    Lone codes are included with an empty name.
+    `exclude` holds roll numbers seen in the same document. A roll number found
+    in a document is never a subject code in that same document (P0-2) — without
+    this, 5-6 digit rolls become columns in the delivered workbook.
+
+    Named subjects come from 'CODE - Name' / 'CODE: Name' patterns. Lone
+    alphanumeric codes are included with an empty name; a lone *numeric* code is
+    only accepted with an explicit subject/paper/course label, because it is
+    otherwise indistinguishable from a roll number.
     """
+    exclude = exclude or set()
     result: dict[str, str] = {}
 
-    # First pass: paired codes with names
+    # First pass: paired codes with names. A "CODE - Name" pair is itself
+    # positive evidence, so numeric codes are accepted here without a label.
     for m in _PAIR_RE.finditer(text):
         code = m.group(1).strip()
         raw_name = m.group(2).strip()
 
-        if code.isdigit():
-            # Check context around the match to filter out PINs, phone numbers, etc.
-            start_idx = max(0, m.start() - 20)
-            context = text[start_idx:m.start()].lower()
-            if "pin" in context or "phone" in context or "mobile" in context or "tel" in context:
-                continue
+        if code in exclude:
+            continue
+        if code.isdecimal() and _is_address_number(text, m.start()):
+            continue
 
-        # Trim trailing garbage (secondary code, excess punctuation, tab-separated columns)
+        # Trim trailing garbage (excess punctuation, tab-separated columns)
         raw_name = re.split(r"\s{2,}|\t", raw_name)[0].strip()
         raw_name = re.sub(r"[\s,;.]+$", "", raw_name).strip()
         if len(raw_name) > 2:
             result[code] = normalize_subject_name(raw_name)
 
-    # Second pass: lone codes not yet seen
-    for m in _CODE_RE.finditer(text):
+    # Second pass: lone alphanumeric codes not yet seen.
+    for m in _ALPHA_CODE_RE.finditer(text):
         code = m.group(1).strip()
-        if code not in result:
-            if code.isdigit():
-                # Check context around the match to filter out PINs, phone numbers, etc.
-                start_idx = max(0, m.start() - 20)
-                context = text[start_idx:m.start()].lower()
-                if "pin" in context or "phone" in context or "mobile" in context or "tel" in context:
-                    continue
+        if code not in result and code not in exclude:
+            result[code] = ""
+
+    # Third pass: lone numeric codes, label-gated.
+    for m in _NUMERIC_CODE_RE.finditer(text):
+        code = m.group(1).strip()
+        if code not in result and code not in exclude:
             result[code] = ""
 
     return result
@@ -102,9 +141,19 @@ def normalize_subject_name(name: str) -> str:
     name = _SPECIAL_RE.sub("", name)
     name = _MULTI_SPACE_RE.sub(" ", name).strip()
     lower = name.lower()
-    for alias, canonical in SUBJECT_ALIASES.items():
-        if lower == alias or lower.startswith(alias + " "):
+
+    # P2-21 — expand the abbreviation but KEEP the remainder. Returning the
+    # canonical name alone renamed "Eng Drawing" to "English" in the delivered
+    # workbook. Longest alias first, so the result no longer depends on dict
+    # insertion order when two aliases both prefix-match.
+    for alias in sorted(SUBJECT_ALIASES, key=len, reverse=True):
+        canonical = SUBJECT_ALIASES[alias]
+        if lower == alias:
             return canonical
+        if lower.startswith(alias + " "):
+            rest = name[len(alias):].strip()
+            return f"{canonical} {rest.title()}".strip()
+
     return name.title()
 
 
@@ -132,7 +181,7 @@ def _natural_sort_key(roll: str) -> tuple:
     an int against a str at the same position.
     """
     return tuple(
-        int(chunk) if chunk.isdigit() else chunk
+        int(chunk) if chunk.isdecimal() else chunk
         for chunk in re.split(r"(\d+)", roll)
     )
 
@@ -144,7 +193,9 @@ def sort_roll_numbers(rolls: list[str]) -> list[str]:
     (alphanumeric-aware) sort. Stable, side-effect free — the input list is
     never mutated, so stored extraction order stays intact for traceability.
     """
-    if all(roll.isdigit() for roll in rolls):
+    # P2-23 — isdigit() is True for superscripts ("12³4") but int() raises on
+    # them; isdecimal() is exactly the "safe for int()" predicate.
+    if all(roll.isdecimal() for roll in rolls):
         return sorted(rolls, key=int)
     return sorted(rolls, key=_natural_sort_key)
 
