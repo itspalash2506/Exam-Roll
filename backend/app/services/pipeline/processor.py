@@ -7,7 +7,12 @@ import traceback
 from sqlalchemy import select
 
 from app.models.db_models import ExtractedData, Job
-from app.schemas.schemas import StudentRecord, SubjectEntry
+from app.schemas.schemas import (
+    StudentRecord,
+    StudentStatus,
+    SubjectConflict,
+    SubjectEntry,
+)
 from app.services.ai.classifier import classify_document
 from app.services.ai.extractor import extract_students_ai, validate_extraction
 from app.utils.file_utils import detect_file_type, validate_size_bytes
@@ -60,15 +65,24 @@ def _humanize_doc_type(doc_type: str) -> str:
 
 # ── Pure aggregation helpers (unit-testable, no side effects) ─────────────────
 
-def merge_subject_maps(maps: list[dict[str, str]]) -> tuple[dict[str, str], list[str]]:
+def merge_subject_maps(
+    maps: list[dict[str, str]],
+) -> tuple[dict[str, str], list[str], list[SubjectConflict]]:
     """Merge per-file {code: name} maps into one unified map.
 
     Later files fill in names missing from earlier files. If two files disagree
-    on a subject's name, the longer (more complete) name wins and a warning is
-    recorded so the conflict is never silent.
+    on a subject's name that is a **conflict** (FUTURE.md §14.4): neither name is
+    chosen, the code is left unnamed, and a SubjectConflict is recorded for the
+    review step to resolve.
+
+    The previous rule picked the longer name automatically, which silently
+    renamed subjects in the delivered workbook — "OS" and "Operating Systems"
+    are a safe guess, but "Paper I" and "Paper II" are not, and the generator
+    cannot tell the two cases apart.
     """
     merged: dict[str, str] = {}
-    warnings: list[str] = []
+    conflicting: dict[str, list[str]] = {}
+
     for subject_map in maps:
         for code, name in subject_map.items():
             existing = merged.get(code)
@@ -77,13 +91,45 @@ def merge_subject_maps(maps: list[dict[str, str]]) -> tuple[dict[str, str], list
             elif name and not existing:
                 merged[code] = name
             elif name and existing and name != existing:
-                longer = name if len(name) > len(existing) else existing
-                warnings.append(
-                    f"Subject {code}: files disagree on the name "
-                    f"('{existing}' vs '{name}') — kept '{longer}'"
-                )
-                merged[code] = longer
-    return merged, warnings
+                names = conflicting.setdefault(code, [existing])
+                if name not in names:
+                    names.append(name)
+
+    # Pick neither: an unnamed code exports as the bare code, which is honest.
+    for code in conflicting:
+        merged[code] = ""
+
+    conflicts = [
+        SubjectConflict(code=code, names=names)
+        for code, names in sorted(conflicting.items())
+    ]
+    return merged, [c.as_warning() for c in conflicts], conflicts
+
+
+def summarize_status_warnings(students: list[StudentRecord]) -> list[str]:
+    """Warn about every student whose status was defaulted or unrecognised.
+
+    §14.1 — neither case may be silent. `other` means the sheet said something
+    the allowlist does not know; a defaulted `regular` means it said nothing.
+    """
+    warnings: list[str] = []
+
+    defaulted = sum(1 for s in students if not s.status_explicit)
+    if defaulted:
+        warnings.append(
+            f"{defaulted} student(s) had no status on the sheet and were "
+            f"defaulted to Regular — confirm before export."
+        )
+
+    unknown = [s for s in students if s.status == StudentStatus.OTHER]
+    if unknown:
+        sample = ", ".join(sorted({s.roll_number for s in unknown})[:3])
+        warnings.append(
+            f"{len(unknown)} student(s) had an unrecognised status "
+            f"(e.g. roll {sample}) and were recorded as Other."
+        )
+
+    return warnings
 
 
 def aggregate_students(
@@ -102,11 +148,22 @@ def aggregate_students(
         return [s for file_students in per_file_students for s in file_students], 0
 
     subjects_by_roll: dict[str, list[str]] = {}
+    # The per-student fields (§14.1) are carried on the first record seen for a
+    # roll; later files fill in a name only if the first had none. Rebuilding a
+    # bare StudentRecord here would silently discard them.
+    first_seen: dict[str, StudentRecord] = {}
     seen_pairs: set[tuple[str, str]] = set()
     duplicate_pairs = 0
     for file_students in per_file_students:
         for student in file_students:
             bucket = subjects_by_roll.setdefault(student.roll_number, [])
+            kept = first_seen.get(student.roll_number)
+            if kept is None:
+                first_seen[student.roll_number] = student
+            elif not kept.name and student.name:
+                first_seen[student.roll_number] = student.model_copy(
+                    update={"subjects": kept.subjects}
+                )
             for code in student.subjects:
                 if (student.roll_number, code) in seen_pairs:
                     duplicate_pairs += 1
@@ -115,7 +172,7 @@ def aggregate_students(
                     bucket.append(code)
 
     students = [
-        StudentRecord(roll_number=roll, subjects=sorted(codes))
+        first_seen[roll].model_copy(update={"subjects": sorted(codes)})
         for roll, codes in subjects_by_roll.items()
     ]
     return students, duplicate_pairs
@@ -285,6 +342,20 @@ class DocumentProcessor:
                 continue
 
             unit = "pages" if file_type == "pdf" else "rows"
+
+            # P0-1 honesty check. A one-student-per-page document legitimately
+            # yields students == pages; anything far below that means the layout
+            # was not recognised and students were dropped. Silence here is what
+            # let P0-1 ship: the job completed green while losing most of a roll.
+            if doc_count > 1 and len(students) <= 1:
+                low_yield = (
+                    f"File {i} ({name}): only {len(students)} student(s) found "
+                    f"across {doc_count} {unit} — the layout may not be "
+                    f"recognised. Verify the output."
+                )
+                logger.warning("Job %s: %s", job_id, low_yield)
+                file_warnings.append(low_yield)
+
             per_file_results.append({
                 "index": i,
                 "name": name,
@@ -357,7 +428,7 @@ class DocumentProcessor:
 
         # ── STAGE: detecting_subjects ────────────────────────────────────────
         await _emit("detecting_subjects", "active")
-        merged_subjects, name_conflicts = merge_subject_maps(
+        merged_subjects, name_conflicts, _conflicts = merge_subject_maps(
             [r["subjects"] for r in per_file_results]
         )
         file_warnings.extend(name_conflicts)
@@ -384,9 +455,12 @@ class DocumentProcessor:
             if duplicate_pairs
             else "No duplicates"
         )
+        status_warnings = summarize_status_warnings(students)
+        file_warnings.extend(status_warnings)
         await _emit(
             "deduplicating", "complete",
             detail=dedupe_detail, count=duplicate_pairs,
+            warning="; ".join(status_warnings) if status_warnings else None,
         )
 
         # ── STAGE: ai_analysis ───────────────────────────────────────────────
