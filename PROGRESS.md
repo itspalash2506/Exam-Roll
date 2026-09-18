@@ -76,8 +76,16 @@ Postgres to exist, and auth built on a red test suite cannot be verified. The re
 Full diagnosis and fix code for every item is in `FUTURE.md`.
 
 **WS-0 · Baseline**
-- [ ] Commit `FUTURE.md` + the 5 uncommitted backend modifications (streamed uploads, batch limits) as a clean baseline
-- [ ] Fix inverted SQL `echo` in `database.py:11` — currently logs student PII to production logs (P0-7)
+- [x] Commit `FUTURE.md` + the 5 uncommitted backend modifications (streamed uploads, batch limits) as a clean baseline — 2026-09-18
+- [x] Fix inverted SQL `echo` in `database.py:11` — currently logs student PII to production logs (P0-7) — 2026-09-18
+
+**P01 notes (2026-09-18):**
+- The 5 backend modifications and FUTURE.md were already committed in prior sessions; baseline commit added PROMPTS.md.
+- P0-7 fix: `config.py` gains `sql_echo: bool = False` with a `never_echo_in_production` model_validator that raises at boot when `sql_echo=True` and `app_env == "production"`. `database.py` now reads `_settings.sql_echo` instead of the inverted `_settings.app_env == "production"`.
+- 5 new tests in `tests/test_config.py` for the validator; all pass. Baseline: 4 failed (stale test_ai/test_generators — P02 deletes these), 38 passed.
+- Dashboard.jsx: "Welcome to ExamRoll" replaced with a pilot notice banner from `VITE_PILOT_NOTICE` env var (highlight token, hidden when empty). Heading changed to "Dashboard".
+- Updated `.env.example`, `render.yaml`, `DEPLOYMENT.md`, `frontend/.env.example`, `CLAUDE.md` for `SQL_ECHO` and `VITE_PILOT_NOTICE`.
+- `npm run build` succeeds.
 
 **WS-A · Foundation** *(blocks WS-D)*
 - [ ] Delete stale `tests/test_ai.py` + `tests/test_generators.py`; add `backend/pytest.ini` (P0-3)
