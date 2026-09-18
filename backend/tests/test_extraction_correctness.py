@@ -12,10 +12,9 @@ These pin the two critical data-loss/corruption defects from the 2026-08-31 audi
         extracted as roll numbers AND classified as subjects, becoming columns
         in the delivered workbook.  FUTURE.md §P0-2.
 
-Tests that fail against today's code are marked `xfail(strict=True)`: CI stays
-green, but the suite records the defect and will fail loudly the moment a fix
-lands without this file being updated (strict xfail turns an unexpected PASS
-into a failure).
+Written red in P03 and marked `xfail(strict=True)`; the P04 extraction rewrite
+turned every one of them green, so the markers are gone and these are now
+ordinary regression tests.
 
 The page fixtures are taken verbatim from FUTURE.md §P0-1 and §P0-2.
 """
@@ -77,10 +76,6 @@ def _extract(pages):
 
 # ── P0-1 · every student on a page must be extracted ─────────────────────────
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P0-1 not fixed yet: re.search() keeps only the first roll per page",
-)
 def test_multiple_students_on_one_page_are_all_extracted():
     students, subjects, _, _ = _extract([MULTI_STUDENT_PAGE])
 
@@ -90,10 +85,6 @@ def test_multiple_students_on_one_page_are_all_extracted():
     assert set(subjects) == {"MBAN301"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P0-1 not fixed yet: no bare-roll fallback for unlabelled columns",
-)
 def test_bare_column_roll_layout():
     """Rolls listed one per line with no 'Roll No:' prefix must still be found."""
     students, _, _, _ = _extract([BARE_COLUMN_PAGE])
@@ -105,10 +96,6 @@ def test_bare_column_roll_layout():
 
 # ── P0-2 · roll numbers must never be classified as subject codes ────────────
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=r"P0-2 not fixed yet: \d{5,6} matches roll numbers as subject codes",
-)
 def test_roll_numbers_never_become_subject_codes():
     students, subjects, _, _ = _extract([BARE_CODE_PAGE])
 
@@ -124,10 +111,6 @@ def test_roll_numbers_never_become_subject_codes():
     assert len(students) == 3
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=r"P0-2 not fixed yet: excel_extractor._is_subject_code accepts \d{5,6}",
-)
 def test_xlsx_header_202401_is_not_a_subject():
     """A session/batch header cell like '202401' must not become a column."""
     assert _is_subject_code("MBAN301") is True  # real codes keep working
@@ -138,10 +121,6 @@ def test_xlsx_header_202401_is_not_a_subject():
 
 # ── P0-1 honesty check · low extraction yield must warn ──────────────────────
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P0-1 not fixed yet: no low-yield warning, so data loss stays silent",
-)
 @pytest.mark.asyncio
 async def test_low_yield_warning(client):
     """A 40-page document yielding 1 student must tell the user, not complete green."""

@@ -1,0 +1,19 @@
+{
+  "page_count": 4,
+  "student_count": 4,
+  "roll_numbers": [
+    "23136601",
+    "24136599",
+    "24136600",
+    "24136602"
+  ],
+  "subject_codes": [
+    "MBAN301",
+    "MBAN302"
+  ],
+  "status_counts": {
+    "regular": 2,
+    "atkt": 1,
+    "ex": 1
+  }
+}

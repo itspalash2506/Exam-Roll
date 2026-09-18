@@ -82,24 +82,39 @@ def test_build_subject_roll_map_sorted_ascending():
 def test_merge_subject_maps_later_files_fill_missing_names():
     from app.services.pipeline.processor import merge_subject_maps
 
-    merged, warnings = merge_subject_maps([
+    merged, warnings, conflicts = merge_subject_maps([
         {"CS401": "", "CS402": "Databases"},
         {"CS401": "Operating Systems", "CS403": ""},
     ])
     assert merged == {"CS401": "Operating Systems", "CS402": "Databases", "CS403": ""}
     assert warnings == []
+    assert conflicts == []
 
 
-def test_merge_subject_maps_conflict_keeps_longer_name_and_warns():
+def test_merge_subject_maps_conflict_picks_neither_name():
+    """§14.4 — the old rule auto-picked the longer name; that is now a conflict.
+
+    Deliberately reverses test_merge_subject_maps_conflict_keeps_longer_name_and_warns.
+    "OS" vs "Operating Systems" is a safe guess, but "Paper I" vs "Paper II" is
+    not, and merge_subject_maps cannot tell the two cases apart — so it guesses
+    at neither and hands the decision to the review step.
+    """
     from app.services.pipeline.processor import merge_subject_maps
 
-    merged, warnings = merge_subject_maps([
+    merged, warnings, conflicts = merge_subject_maps([
         {"CS401": "OS"},
         {"CS401": "Operating Systems"},
     ])
-    assert merged["CS401"] == "Operating Systems"
+
+    assert merged["CS401"] == "", "a conflicting code must be left unnamed"
+    assert len(conflicts) == 1
+    assert conflicts[0].code == "CS401"
+    assert conflicts[0].names == ["OS", "Operating Systems"]
+
     assert len(warnings) == 1
     assert "CS401" in warnings[0]
+    # Both candidate names are shown so the user can choose.
+    assert "OS" in warnings[0] and "Operating Systems" in warnings[0]
 
 
 # ── aggregate_students ────────────────────────────────────────────────────────
