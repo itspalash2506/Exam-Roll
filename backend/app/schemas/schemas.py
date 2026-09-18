@@ -1,17 +1,67 @@
+from enum import StrEnum
 from typing import Any
 from pydantic import BaseModel, Field
 
 
 # ── Core extracted data ─────────────────────────────────────────────────────
 
+class StudentStatus(StrEnum):
+    """Candidate category on an attestation sheet (FUTURE.md §14.1).
+
+    `other` is the sink for spellings the allowlist does not know — it is never
+    a silent default: the pipeline records a warning naming the count, because
+    a silent default is the P0-1 failure class over again.
+    """
+
+    REGULAR = "regular"
+    EX = "ex"
+    ATKT = "atkt"
+    PRIVATE = "private"
+    OTHER = "other"
+
+
 class SubjectEntry(BaseModel):
     code: str
     name: str
+    # §14.2 — optional at extraction time; the code → exam_code mapping is
+    # entered once per exam in the Paper setup screen (Gate F) when the sheet
+    # carries only the subject code.
+    exam_code: str | None = None
+    paper_no: str | None = None
+    group_label: str | None = None
 
 
 class StudentRecord(BaseModel):
     roll_number: str
     subjects: list[str]
+    # §14.1 — name is optional on outputs (Q11), so a missing one is an empty
+    # string with no warning. A missing status is NOT silent; see StudentStatus.
+    name: str = ""
+    status: StudentStatus = StudentStatus.REGULAR
+    admission_year: int | None = None
+    # False when the sheet carried no status text for this student and `status`
+    # is therefore the `regular` default. The pipeline counts these and warns;
+    # §14.1 is explicit that a silent default is the P0-1 failure class again.
+    status_explicit: bool = True
+
+
+class SubjectConflict(BaseModel):
+    """Same code, two different names within one batch (FUTURE.md §14.4).
+
+    Neither name is picked. The conflict is recorded so the review step can
+    show both and let the user choose; auto-picking the longer name (the old
+    behaviour) silently renamed subjects in the delivered workbook.
+    """
+
+    code: str
+    names: list[str]
+
+    def as_warning(self) -> str:
+        shown = " / ".join(f"'{n}'" for n in self.names)
+        return (
+            f"Subject {self.code} has conflicting names ({shown}) — "
+            f"none was chosen; confirm the correct name before export."
+        )
 
 
 class ExtractedDataSchema(BaseModel):
