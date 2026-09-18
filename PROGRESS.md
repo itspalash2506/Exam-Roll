@@ -107,10 +107,33 @@ Full diagnosis and fix code for every item is in `FUTURE.md`.
 - `npm run build` succeeds cleanly.
 
 **WS-B · Extraction correctness**
-- [ ] Per-line roll scan replacing `.search()` in `pdf_extractor.py:56-72` (P0-1)
-- [ ] Roll-number exclusion set + labelled-numeric-code allowlist in `subject_utils.py` (P0-2)
-- [ ] Low-yield warning when students found is far below page count (P0-1)
-- [ ] Regression tests: multi-student page, roll-as-subject, one-per-page still works
+- [x] Per-line roll scan replacing `.search()` in `pdf_extractor.py:56-72` (P0-1) — 2026-09-19
+- [x] Roll-number exclusion set + labelled-numeric-code allowlist in `subject_utils.py` (P0-2) — 2026-09-19
+- [x] Low-yield warning when students found is far below page count (P0-1) — 2026-09-19
+- [x] Regression tests: multi-student page, roll-as-subject, one-per-page still works — 2026-09-18
+
+**WS-G · Extraction extensions (FUTURE_UNIFIED.md §14)**
+- [x] Student `name`, `status` allowlist, `admission_year` (§14.1) — 2026-09-19
+- [x] Paper `exam_code`, `paper_no`, `group_label`, optional at extraction (§14.2) — 2026-09-19
+- [x] Conflict rule replaces "longer name wins" (§14.4) — 2026-09-19
+- [x] §14.5 tests (4 of 5) + golden-file harness — 2026-09-19
+- [ ] §14.5 re-upload test ("N already enrolled", zero new `Student` rows) — **deferred to P09**: needs the `students`/`enrollments` tables from migration `0002_exam_model`
+- [ ] Exam + college picker at upload (§14.3) — **P10**
+
+**P03 notes (2026-09-18):**
+- `backend/tests/test_extraction_correctness.py`: 8 tests pinning P0-1/P0-2, committed red with `xfail(strict=True)` so CI stayed green while the suite recorded the defects. Verified with `--runxfail` that each failed on its intended assertion.
+- Committed on its own branch `p03-extraction-tests` (commit `e755238`) after initially landing on `p02-test-infrastructure`; the P02 branch pointer was reset back to `4810332`.
+
+**P04 notes (2026-09-19):**
+- Suite: **86 passed, 0 failed** (was 56). `npm run build` succeeds.
+- Real-PDF regression (`SRIT Regular 167.pdf`, 168 pages): **167 students / 15 subjects**, matching the numbers recorded above — plus 167 names captured, all statuses explicit, and zero roll numbers in the subject map.
+- The PDF is now gitignored (`*.pdf`): it is real student PII and was sitting untracked in the repo root.
+- Three bugs surfaced only by running the real document and the golden fixture, none of which the synthetic tests would have caught:
+  1. `Enroll\w*` backtracked to `Enroll` and, because `re.IGNORECASE` lets `[A-Z0-9]` match lowercase, captured the `ment` of "Enrollment" as a roll number.
+  2. Attestation sheets carry BOTH a Roll No and an Enrollment No per student, so the per-line scan produced 334 students for 167 candidates until the two labelled forms were given precedence per page.
+  3. `_PAIR_RE` used `\s*` around its separator; `\s` matches a newline, so the line `PH: 47175-` bound itself to the whole of the next line and turned a phone number into a named subject.
+- Found during P04, not fixed here: `_combined_text_sample` still drops files 8-10 of a 10-file batch (P2-24); `detect_subject_code_pattern` still uses the legacy `_CODE_RE`.
+- **Behaviour reversal:** `merge_subject_maps` no longer picks the longer name on a conflict (§14.4) and now returns a 3-tuple. `test_merge_subject_maps_conflict_keeps_longer_name_and_warns` was replaced, not weakened; CLAUDE.md updated to match.
 
 **WS-C · Output and AI safety**
 - [ ] `_safe()` formula-injection guard on every user/AI sink in `excel_generator.py` (P0-5)
