@@ -26,8 +26,12 @@ htmlcov/
 *.db
 *.sqlite3
 
-# Alembic
-alembic/versions/
+# Alembic migration files (alembic/versions/*.py) are DELIBERATELY tracked
+# — they are the schema's actual history, not build output. A previous rule
+# here (`alembic/versions/`) would have silently excluded every migration
+# ever written; caught before the first one was committed (DECISIONS.md,
+# 2026-09-19). Only Alembic's own __pycache__ needs ignoring, already
+# covered by the top-level __pycache__/ rule below.
 
 # Node
 node_modules/

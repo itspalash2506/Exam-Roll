@@ -179,3 +179,27 @@ matches `FUTURE_UNIFIED.md`'s own 2026-09-18 amendment to §7.2, which reaches t
 conclusion under the "pilot-first" sequencing this project adopted.
 
 ---
+
+## 2026-09-19 — Stale `.gitignore` rule would have silently excluded every migration
+
+**What happened.** While wiring up Alembic, `.gitignore` was found to contain a rule
+`alembic/versions/` — added at some earlier point, apparently in anticipation of Alembic,
+before it was actually set up. If left in place, it would have silently excluded every
+migration file (`0000_baseline.py` and everything after it) from every future commit.
+
+**Why it happened.** The rule was speculative — written before there was any
+`alembic/versions/` directory to test it against, so nothing ever exercised it.
+
+**What it would have cost to ignore.** A migration history that looks complete locally
+(the files exist on disk, `alembic upgrade head` works) but is entirely absent from the
+repository — every clone, every CI run, and every deploy would be missing the actual
+schema history, discovered only when someone else tried to run `alembic upgrade head`
+against an empty database and got nothing.
+
+**What we decided and why.** Removed the rule. Migration files are schema history, not
+build output — they belong in version control the same way the ORM models do. Verified
+`git add -n backend/alembic/` now stages exactly `env.py`, `script.py.mako`, `README`, and
+`versions/0000_baseline.py`, with `__pycache__/` still correctly excluded by the existing
+top-level rule.
+
+---

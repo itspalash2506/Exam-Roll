@@ -15,3 +15,15 @@ python-dotenv>=1.0.1
 aiofiles>=24.1.0
 aiosqlite>=0.20.0
 websockets>=13.0
+
+# Postgres migration (DECISIONS.md, 2026-09-19): asyncpg is the app's own
+# runtime driver; psycopg2-binary is a SYNC driver needed only because
+# Alembic's migration runner is fundamentally synchronous and cannot drive
+# an async engine directly — see alembic/env.py.
+alembic>=1.13.0
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+
+# Session auth (DECISIONS.md, 2026-09-19): argon2id password hashing.
+# Never bcrypt (72-byte silent truncation), never a bare hash.
+argon2-cffi>=23.1.0

@@ -35,6 +35,58 @@ jobs:
       - name: Run pytest
         run: pytest -q
 
+  alembic-postgres:
+    # Migrations are authored/tested locally against SQLite (DECISIONS.md,
+    # 2026-09-19 — see also alembic/env.py's render_as_batch), but ship
+    # against Postgres in production. This is the only place that's
+    # actually verified before a migration reaches Supabase: a migration
+    # could pass every local check and still fail the moment it's run
+    # against the real dialect.
+    name: Alembic migrations on Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: examroll
+          POSTGRES_PASSWORD: examroll
+          POSTGRES_DB: examroll
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql+asyncpg://examroll:examroll@localhost:5432/examroll
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: alembic upgrade head (from empty)
+        run: alembic upgrade head
+
+      - name: alembic downgrade base, then upgrade head again (round-trip)
+        run: |
+          alembic downgrade base
+          alembic upgrade head
+
   frontend:
     name: Frontend Build (Node 20)
     runs-on: ubuntu-latest

@@ -24,33 +24,19 @@ class Base(DeclarativeBase):
     pass
 
 
-async def init_db() -> None:
-    from app.models import db_models  # noqa: F401 — registers all ORM models
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # create_all only creates missing *tables* — it never adds columns to an
-        # existing table. Auto-add any nullable model columns missing from an
-        # existing SQLite DB (e.g. jobs.source_files / file_count added for
-        # multi-file batches) so old examroll.db files keep working without a
-        # manual migration step.
-        await conn.run_sync(_add_missing_nullable_columns)
-
-
-def _add_missing_nullable_columns(conn) -> None:
-    from sqlalchemy import inspect, text
-
-    inspector = inspect(conn)
-    for table in Base.metadata.sorted_tables:
-        if not inspector.has_table(table.name):
-            continue
-        existing = {col["name"] for col in inspector.get_columns(table.name)}
-        for column in table.columns:
-            if column.name in existing or not column.nullable:
-                continue  # only safe, nullable additions — never touch NOT NULL
-            col_type = column.type.compile(conn.dialect)
-            conn.execute(
-                text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}')
-            )
+# Schema is managed exclusively by Alembic now (`alembic upgrade head`, run
+# out-of-band before the app starts — see alembic/env.py), not at app boot
+# (DECISIONS.md, 2026-09-19). This replaces the previous init_db(), which
+# ran create_all() plus a hand-rolled _add_missing_nullable_columns() shim
+# that could only ever ADD a nullable column — never enforce NOT NULL,
+# rename, drop, or add an index (P2-44) — and raced unguarded if more than
+# one worker started at once. The upcoming tenancy migration needs a real
+# NOT NULL column, which that shim could never have added anyway.
+#
+# Test schema setup is unaffected: conftest.py's setup_test_db fixture calls
+# Base.metadata.create_all directly against its own throwaway test engine
+# and has never gone through this module's init_db — removing it changes
+# nothing about how the test suite sets up its database.
 
 
 async def get_db():

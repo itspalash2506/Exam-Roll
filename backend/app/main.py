@@ -8,7 +8,6 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.database import init_db
 from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.websocket_manager import manager
 from app.routers import upload, jobs, export
@@ -25,7 +24,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _settings.ensure_runtime_dirs()
-    await init_db()
+    # Schema is applied by `alembic upgrade head` before the app starts, not
+    # at boot (DECISIONS.md, 2026-09-19) — see alembic/env.py.
     logger.info("ExamRoll started  env=%s", _settings.app_env)
     yield
     logger.info("ExamRoll shutting down")

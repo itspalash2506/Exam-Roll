@@ -24,7 +24,9 @@ class Job(Base):
     # Multi-file batches: JSON array of the original uploaded filenames, and how
     # many files the job covers. `filename` keeps a human summary for back-compat
     # (the single filename, or "N files (first, …)" for a batch). All columns are
-    # nullable so pre-existing SQLite rows keep working (init_db auto-adds them).
+    # nullable so a pre-existing DB row keeps working across the Alembic
+    # migration that adds them (schema changes go through alembic/versions/
+    # now, not a boot-time auto-migration — DECISIONS.md, 2026-09-19).
     source_files: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=1)
     # JSON array of per-file processing warnings (e.g. "File 2 (x.pdf): no roll
