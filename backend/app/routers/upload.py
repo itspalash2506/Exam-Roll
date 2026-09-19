@@ -1,7 +1,7 @@
 import json
 import logging
-import os
 import shutil
+import tempfile
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
@@ -14,7 +14,8 @@ from app.database import AsyncSessionLocal, get_db
 from app.models.db_models import College, Exam, Job, User
 from app.schemas.schemas import UploadResponse
 from app.services.pipeline.processor import processor
-from app.utils.file_utils import detect_file_type, stream_upload_to_job_dir
+from app.services import storage
+from app.utils.file_utils import detect_file_type, safe_indexed_filename, stream_upload_to_job_dir
 from app.websocket_manager import manager
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ router = APIRouter(tags=["upload"], dependencies=[Depends(require_org)])
 _settings = get_settings()
 
 
-async def _run_processing(job_id: str, files: list[tuple[str, str]]) -> None:
+async def _run_processing(job_id: str, files: list[tuple[str, str, int]]) -> None:
     async with AsyncSessionLocal() as db:
         await processor.process(job_id, files, db, manager)
 
@@ -69,18 +70,20 @@ async def upload_file(
             raise HTTPException(status_code=400, detail="Unknown college_id")
 
     job_id = str(uuid.uuid4())
-    job_dir = os.path.join(_settings.upload_dir, job_id)
+    key_prefix = f"{job_id}/"
 
-    # Stream every file STRAIGHT to uploads/{job_id}/ rather than reading it
-    # into memory: the whole batch used to be resident at once (and stayed
-    # resident for the entire background job, since the bytes were handed to
-    # the task), which is what OOM-killed the 512 MB container. Now only a
-    # 1 MiB chunk is ever in flight, and the pipeline receives file PATHS.
-    #
-    # Validation still rejects the whole request naming the offending file —
-    # the partially written job dir is removed so nothing half-uploaded is left
-    # behind for a later job to trip over.
-    batch: list[tuple[str, str]] = []
+    # Object storage (Cloudflare R2, DECISIONS.md 2026-09-20): each file is
+    # streamed to a TRANSIENT local staging directory first — chunked async
+    # I/O can't hand bytes directly to boto3 (sync), so a brief local touch
+    # is unavoidable — then pushed to the configured storage backend and the
+    # staged copy deleted immediately. Local disk stops accumulating
+    # anything; it's scratch space for the duration of one upload, not
+    # long-term storage. staging_dir is a real OS temp directory, NEVER
+    # upload_dir — when object storage is disabled (local-disk fallback),
+    # upload_dir IS the permanent store, and staging there would mean
+    # deleting the only copy after "uploading" it to itself.
+    staging_dir = tempfile.mkdtemp(prefix="examroll-upload-")
+    batch: list[tuple[str, str, int]] = []
     file_types: list[str] = []
     total_bytes = 0
     try:
@@ -88,8 +91,8 @@ async def upload_file(
             original_name = upload.filename or "upload"
             try:
                 file_types.append(detect_file_type(original_name))
-                path, written = await stream_upload_to_job_dir(
-                    upload, _settings.upload_dir, job_id, i, _settings.max_file_size_mb
+                staged_path, written = await stream_upload_to_job_dir(
+                    upload, staging_dir, job_id, i, _settings.max_file_size_mb
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"'{original_name}': {exc}")
@@ -99,12 +102,17 @@ async def upload_file(
                     status_code=400,
                     detail=f"Batch exceeds the {_settings.max_total_batch_mb} MB total limit",
                 )
-            batch.append((original_name, path))
+            key = key_prefix + safe_indexed_filename(i, original_name)
+            await storage.upload_local_file(staged_path, key)
+            batch.append((original_name, key, written))
     except Exception:
-        shutil.rmtree(job_dir, ignore_errors=True)
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        await storage.delete_prefix(key_prefix)
         raise
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
-    names = [name for name, _ in batch]
+    names = [name for name, _, _ in batch]
 
     job = Job(
         id=job_id,
@@ -114,7 +122,7 @@ async def upload_file(
         college_id=college_id,
         filename=_batch_summary_name(names),
         file_type=file_types[0] if len(set(file_types)) == 1 else "mixed",
-        file_path=os.path.join(_settings.upload_dir, job_id),
+        file_path=key_prefix,
         source_files=json.dumps(names),
         file_count=len(batch),
         status="queued",

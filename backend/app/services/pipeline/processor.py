@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import os
 import traceback
 
 from sqlalchemy import select
@@ -15,6 +14,7 @@ from app.schemas.schemas import (
 )
 from app.services.ai.classifier import classify_document
 from app.services.ai.extractor import extract_students_ai, validate_extraction
+from app.services import storage
 from app.utils.file_utils import detect_file_type, validate_size_bytes
 from app.utils.roll_sort import roll_sort_key
 from app.utils.subject_utils import sort_subjects
@@ -365,7 +365,7 @@ class DocumentProcessor:
     async def process(
         self,
         job_id: str,
-        files: list[tuple[str, str]],
+        files: list[tuple[str, str, int]],
         db_session,
         ws_manager,
     ) -> None:
@@ -431,14 +431,17 @@ class DocumentProcessor:
         # ── STAGE: validating ────────────────────────────────────────────────
         await _emit("validating", "active")
 
-        # files is [(original_name, path_on_disk)] — the bytes stay on disk and
-        # are read one file at a time in the reading stage below, so at most one
-        # document is resident at any moment.
+        # files is [(original_name, storage_key, size_bytes)] (DECISIONS.md,
+        # 2026-09-20) — size travels with the batch from upload.py, which
+        # already knew it while streaming, rather than being re-derived here
+        # via a filesystem stat that no longer applies once the bytes may
+        # live in object storage instead of on local disk. Only one file's
+        # bytes are ever resident at once, fetched one at a time in the
+        # reading stage below.
         per_file_types: list[str] = []
         file_sizes: list[int] = []
-        for name, path in files:
+        for name, _key, size in files:
             per_file_types.append(detect_file_type(name))
-            size = os.path.getsize(path)
             file_sizes.append(size)
             validate_size_bytes(size, settings.max_file_size_mb)
 
@@ -468,7 +471,7 @@ class DocumentProcessor:
 
         per_file_results: list[dict] = []
         read_failures: list[str] = []
-        for i, (name, path) in enumerate(files, start=1):
+        for i, (name, key, _size) in enumerate(files, start=1):
             file_type = per_file_types[i - 1]
             if n_files > 1:
                 await _emit(
@@ -476,12 +479,16 @@ class DocumentProcessor:
                     detail=f"File {i} of {n_files} · {name}",
                 )
             try:
-                # Read and parse in one worker thread, then drop the bytes
-                # before moving to the next file. Holding the whole batch was
-                # what made peak memory scale with batch size.
+                # Fetch bytes from the storage backend (local disk or R2 —
+                # storage.py decides), then parse in a worker thread and
+                # drop the bytes before moving to the next file. Holding the
+                # whole batch resident was what made peak memory scale with
+                # batch size.
+                file_bytes = await storage.download_bytes(key)
                 students, subjects, sample, doc_count = await asyncio.to_thread(
-                    _read_and_extract, file_type, path, name
+                    _run_extractor, file_type, file_bytes, name
                 )
+                del file_bytes
             except Exception as exc:
                 # One unreadable file must not abort the batch — record and go on.
                 msg = f"File {i} ({name}): could not be read — {exc}"
@@ -810,23 +817,6 @@ async def process_job(job_id: str) -> None:
 
 
 # ── Sync helper (runs in a thread via asyncio.to_thread) ─────────────────────
-
-def _read_and_extract(
-    file_type: str, path: str, filename: str
-) -> tuple[list[StudentRecord], dict[str, str], str, int]:
-    """Read one file off disk, extract from it, and release the bytes.
-
-    Runs in a worker thread. The `del` is deliberate: it drops the document's
-    bytes at the end of THIS call rather than at the end of the batch loop, so
-    the next file starts from a clean baseline.
-    """
-    with open(path, "rb") as fh:
-        file_bytes = fh.read()
-    try:
-        return _run_extractor(file_type, file_bytes, filename)
-    finally:
-        del file_bytes
-
 
 def _run_extractor(
     file_type: str, file_bytes: bytes, filename: str

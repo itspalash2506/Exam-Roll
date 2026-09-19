@@ -74,8 +74,12 @@ examroll/
 │       │   ├── generators/
 │       │   │   ├── excel_generator.py Styled openpyxl Excel output
 │       │   │   └── workbook_builder.py Shared formula-injection guard (_safe()) + styling helpers (P0-5)
-│       │   └── pipeline/
-│       │       └── processor.py       Orchestrator: extract → classify → generate → persisting_rows
+│       │   ├── pipeline/
+│       │   │   └── processor.py       Orchestrator: extract → classify → generate → persisting_rows
+│       │   └── storage/
+│       │       ├── __init__.py        upload_local_file/upload_bytes/download_bytes/object_exists/delete_object/delete_prefix — dispatches by settings.object_storage_enabled
+│       │       ├── _local.py          Fallback backend: each key -> a real file under UPLOAD_DIR
+│       │       └── _r2.py             Cloudflare R2 via boto3 (S3-compatible), asyncio.to_thread()
 │       └── utils/
 │           ├── file_utils.py          MIME detection, size validation, safe paths
 │           ├── subject_utils.py       Subject name normalization, abbreviation map
@@ -223,7 +227,8 @@ an orientation summary, not the authoritative reference.
 | GROQ_API_KEY       | Groq API key (required)                  |
 | GROQ_MODEL         | Model ID (default: openai/gpt-oss-20b)   |
 | DATABASE_URL       | SQLAlchemy connection string — `sqlite+aiosqlite:///...` in dev, `postgresql+asyncpg://...` in production. `alembic/env.py` derives its own sync URL from this same value; schema is applied via `alembic upgrade head`, not at app boot. |
-| UPLOAD_DIR         | Directory for temp uploads               |
+| UPLOAD_DIR         | Fallback storage when R2 isn't configured (below) — the default for local dev. Not where files live once R2 is set. |
+| R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME | Cloudflare R2 object storage (DECISIONS.md, 2026-09-20) — all four required together, or leave all empty to use UPLOAD_DIR instead. |
 | MAX_FILE_SIZE_MB   | Max upload size in MB                    |
 | CORS_ORIGINS       | Allowed CORS origins (comma-separated). With same-origin serving in production this is mostly a local-dev concern (Vite on `localhost:5173`); also checked by `authorize_ws`'s `Origin` validation. |
 | CORS_ORIGIN_REGEX  | Optional anchored regex for preview origins |
@@ -366,7 +371,7 @@ POST /api/v1/export → [excel_generator.py] → .xlsx blob → download
 - Target: frontend on Cloudflare Pages (Vercel fallback), backend on Render free tier — full dashboard walkthrough in `DEPLOYMENT.md`.
 - `src/api/client.js` is the single source of truth for the backend location: `VITE_API_BASE_URL` (build-time) prefixes the axios base URL and the WebSocket URL is derived from it (http→ws / https→wss); unset ⇒ relative paths through the Vite dev proxy, so local dev is unchanged. Axios timeout raised 60s→120s to survive Render cold starts.
 - `GROQ_API_KEY` now defaults to `""` so the app boots without it (pipeline already degrades to rule-based; `/health` reports "not configured").
-- `Settings.ensure_runtime_dirs()` (called in lifespan before `init_db`) creates `UPLOAD_DIR` and the SQLite file's parent dir, so a fresh ephemeral container boots cleanly. Ephemeral-disk caveat (DB/uploads/outputs wiped on restart) is documented in config.py, .env.example, and DEPLOYMENT.md — **Phase 2 migrates to managed Postgres; object storage follows in Phase 3.** Once Postgres holds durable state and source files are deleted after extraction, local disk is scratch space and an ephemeral disk stops being a data-loss risk.
+- `Settings.ensure_runtime_dirs()` (called in lifespan before `init_db`) creates `UPLOAD_DIR` and the SQLite file's parent dir, so a fresh ephemeral container boots cleanly. Ephemeral-disk caveat (DB/uploads/outputs wiped on restart) is documented in config.py, .env.example, and DEPLOYMENT.md — **both since resolved (2026-09-19/20): Postgres holds durable state, and object storage (see below) means local disk is genuinely scratch space now, not something an ephemeral container puts at risk.**
 - Deploy artifacts: `render.yaml` (Blueprint, `rootDir: backend`, env vars `sync: false` — values live only in the Render dashboard), `backend/.python-version` (3.14.5, matching the local venv), `frontend/public/_redirects` + `frontend/vercel.json` (SPA fallback), `frontend/.env.example`.
 - `.gitignore` fix: `uploads/*` was root-anchored and missed `backend/uploads/`; now `uploads/` (any depth).
 
@@ -427,6 +432,46 @@ POST /api/v1/export → [excel_generator.py] → .xlsx blob → download
 - **Landed on branch `p05-foundation-auth-postgres`, not yet merged to `main`** — `main` remains the
   deployed v1, untouched, at the user's explicit request until this branch is tested and the merge is
   a deliberate separate decision.
+
+### Object storage — Cloudflare R2 (2026-09-20)
+- **Uploaded files and generated outputs no longer accumulate on the server's disk.** They live
+  in Cloudflare R2 whenever it's configured; local `UPLOAD_DIR` is the fallback (used when R2
+  settings are unset — the default for local dev). Chosen over storing files as database BLOBs
+  (wrong tool for multi-MB files) and over Neon's own newer object storage offering (also
+  S3-compatible, but in beta — not the right dependency for real student records). Full
+  comparison and reasoning in `DECISIONS.md`.
+- **`app/services/storage/`** is the ONLY place that touches `os`/`shutil` for source/output
+  files, or imports `boto3` — `_local.py` and `_r2.py`, dispatched on every call by
+  `settings.object_storage_enabled` (checked fresh each time, not fixed at import, so tests can
+  monkeypatch R2 settings and get real dynamic dispatch). Every router and `processor.py` call
+  only the top-level `upload_local_file`/`upload_bytes`/`download_bytes`/`object_exists`/
+  `delete_object`/`delete_prefix` — never a backend directly.
+- **`Job.file_path`/`OutputFile.filepath` now hold a storage KEY** (`{job_id}/{filename}`), not a
+  local path — no new migration needed, both were already plain string columns. `Job.file_path` is
+  the key PREFIX (`{job_id}/`) covering every source file AND every generated output for that job
+  (outputs are written under the same prefix), so `delete_job` is one `delete_prefix` call instead
+  of enumerating and removing files individually.
+- **Local disk isn't eliminated, just made transient.** Chunked async upload streaming can't hand
+  bytes directly to the synchronous R2 client (boto3), so each file is still briefly staged to a
+  real OS temp directory (`tempfile.mkdtemp()`) before being pushed to storage and the staged copy
+  deleted — success or failure. Staging deliberately never uses `UPLOAD_DIR` itself: in local-disk
+  fallback mode, `UPLOAD_DIR` **is** the permanent store, so treating it as transient staging too
+  would delete the only copy of a file right after "uploading" it to itself.
+- **Extraction needed no local-file involvement at all**, once this was checked directly against
+  the actual extractor code rather than trusted from an older note: `pdfplumber`/`openpyxl` both
+  already open a `BytesIO`, not a filesystem path, so `processor.py` fetches bytes from storage
+  straight into memory for parsing — no second local copy, ever.
+- **Tests**: `moto` mocks the S3 API in-process for real automated coverage of the R2 backend's
+  actual logic (upload/download/delete, and `delete_prefix`'s pagination + batch-delete, the most
+  bug-prone part) — with one caveat worth knowing before writing more storage tests: `moto` only
+  intercepts calls to a **standard AWS endpoint**, not R2's custom `endpoint_url`, so tests patch
+  `_r2._client` to build a plain default-endpoint client (which `moto` mocks correctly) while every
+  function body under test runs completely unmodified. Full explanation in `DECISIONS.md`.
+- Verified live end-to-end (local-disk mode, real R2 verification pending real credentials):
+  uploaded the real 167-page attestation PDF (`SRIT Regular 167.pdf`), confirmed the exact
+  known-good extraction count through the new bytes-from-storage pipeline path, exported,
+  re-downloaded byte-identical to the original export, deleted the job, and confirmed the disk was
+  completely clean afterward — no leftover job directory.
 
 ### Purely numeric subject codes & PIN filtering (2026-07-07)
 - Support for purely numeric codes: Updated `_CODE_RE` and `_PAIR_RE` in `subject_utils.py` and `excel_extractor.py` to match 5-to-6 digit purely numeric subject codes (e.g. `210236`) in addition to alphanumeric codes (e.g. `MBAN301`).

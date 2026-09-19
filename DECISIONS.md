@@ -286,3 +286,94 @@ migrations cleanly, and a direct query confirmed the correct schema landed (12 t
 NOT NULL, `exam_id`/`college_id` nullable).
 
 ---
+
+## 2026-09-20 — `moto` doesn't intercept a custom S3 `endpoint_url`
+
+**What happened.** Testing the R2 storage backend with `moto` (which mocks the S3 API in-process
+for automated tests) worked for a plain `boto3.client("s3")` with no endpoint override, but every
+call through a client configured with R2's actual `endpoint_url`
+(`https://<account_id>.r2.cloudflarestorage.com`) failed with a genuine SSL handshake error against
+that hostname — meaning the request was actually leaving the process and hitting the network,
+not being mocked at all.
+
+**Why it happened.** `moto`'s HTTP interception matches requests against botocore's known AWS
+endpoint URL patterns. A custom domain like R2's account-specific endpoint doesn't match any of
+those patterns, so `moto` has nothing to intercept and the request goes out for real — to a
+hostname that (in the test's case) doesn't resolve to anything real.
+
+**What it would have cost to ignore.** Either the R2 backend's actual logic (upload/download/
+delete/prefix-delete, especially the pagination and batch-delete behavior for cleaning up a job's
+files) would have shipped with zero automated coverage, or tests would have silently made real
+network calls during every CI run — slow, flaky, and pointless against a nonexistent host.
+
+**What we decided and why.** Tests patch `_r2._client` to construct a `boto3` client with NO
+custom endpoint (which `moto` mocks correctly), while every function body under test —
+`upload_local_file`, `download_bytes`, `object_exists`, `delete_object`, `delete_prefix`'s
+pagination/batch-delete loop — runs completely unmodified. That's the actual logic that could have
+a bug. The `endpoint_url`/`region_name="auto"` wiring itself is a single f-string in `_client()`,
+low-risk by inspection, and gets its real verification separately: a live check against the user's
+actual R2 bucket once credentials exist, the same two-layer approach (automated logic tests +
+one live check) already used for the Postgres migration.
+
+---
+
+## 2026-09-20 — Uploaded files and generated outputs moved off local disk to Cloudflare R2
+
+**What happened.** Uploaded attestation sheets and generated Excel outputs lived on the server's
+local disk (`uploads/{job_id}/`), permanently, with nothing cleaning them up. On the current
+deployment topology this caused real memory/disk pressure on the running server — every upload
+and every export added another file that never went away.
+
+**Why it happened.** The app was originally built as a single-server local tool; disk-backed
+storage was the simplest thing that worked at the time, and cleanup was explicitly deferred (this
+matches a known gap already named in the project's own roadmap — a retention janitor was always
+planned, just not built yet).
+
+**What it would have cost to ignore.** The disk fills up in direct proportion to usage, with no
+ceiling — every exam batch uploaded and every Excel exported is one more file that stays forever.
+On a small/shared-resource host this becomes an outage, not just a cleanup annoyance.
+
+**What we decided and why.** Object storage (Cloudflare R2), not a database BLOB column — a
+database is the wrong tool for multi-MB files (cost, backup size, and query-optimized storage
+engines aren't built for streaming binary blobs). R2 specifically: zero egress fees (every
+download costs nothing, ever, no allowance to track) and a mature, stable product — chosen over
+Neon's own newer object storage offering (which is S3-compatible too, and genuinely would have
+worked, but is in beta) specifically because this data is real student records, not something to
+build on a beta dependency for. Full comparison discussed with the user before deciding.
+
+**How it was built**, to keep the change reversible and low-risk:
+- `app/services/storage/` — one module (`upload_local_file`, `upload_bytes`, `download_bytes`,
+  `object_exists`, `delete_object`, `delete_prefix`) with two interchangeable backends chosen on
+  every call by whether R2 is configured, not fixed once at import — `_local.py` (the fallback,
+  used whenever R2 settings are unset) and `_r2.py` (boto3, wrapped in `asyncio.to_thread()` the
+  same way this codebase already handles other blocking I/O). Every router and the pipeline call
+  only the top-level dispatch, never a backend directly, and never touch `os`/`shutil` for
+  source/output files anymore.
+- Zero new database migration: `Job.file_path` and `OutputFile.filepath` already were plain
+  string columns — they now hold a storage KEY (`{job_id}/{filename}`) instead of a local path.
+  Both backends interpret the same key consistently, so nothing else had to change shape.
+- Local disk is not eliminated entirely: incoming uploads are still briefly staged to a real
+  temp directory (`tempfile.mkdtemp()`, never `UPLOAD_DIR` — see the local-fallback note below)
+  because the existing chunked-async-upload code can't hand bytes directly to the synchronous R2
+  client. That staged copy is deleted immediately after the push to the storage backend, on
+  success or failure — local disk is scratch space for the duration of one upload, not storage.
+- Extraction already worked from in-memory bytes (`pdfplumber`/`openpyxl` both open a `BytesIO`)
+  — confirmed by reading the actual extractor code rather than trusting an older note in
+  `PROGRESS.md` that turned out to describe an earlier version. This meant the pipeline needed no
+  second local copy at all to process a file: it fetches bytes from storage directly.
+- The local-disk fallback (`_local.py`) matters for more than just tests: if R2 settings are
+  ever unset (misconfigured, or a deliberate choice), `upload_dir` becomes the real permanent
+  store again, exactly as before this change — deleting the transient staging copy in that mode
+  would have deleted the only copy, which is why staging uses a genuinely separate temp
+  directory rather than `upload_dir` itself.
+
+**Testing**: the R2 backend has real automated coverage via `moto` (mocks the S3 API in-process —
+see the separate DECISIONS.md entry on its custom-`endpoint_url` limitation and how that was
+worked around), not just the local-disk fallback tests. Full live verification — upload the real
+167-page attestation PDF, confirm the exact known-good extraction count, export, re-download
+byte-identical, delete, confirm disk fully clean — was run end-to-end in local-disk mode; the same
+flow against a real R2 bucket is verified once real credentials exist, matching the same
+two-layer approach (automated logic tests + one live check) already used for the Postgres
+migration.
+
+---

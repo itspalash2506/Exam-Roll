@@ -1,6 +1,4 @@
 import logging
-import os
-import shutil
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +10,7 @@ from app.auth import require_org
 from app.database import get_db
 from app.models.db_models import Job
 from app.schemas.schemas import JobDetailResponse, JobResponse
+from app.services import storage
 
 logger = logging.getLogger(__name__)
 # require_org at the ROUTER level (not per-endpoint) so a route added later
@@ -145,24 +144,18 @@ async def delete_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Collect paths to delete from disk before removing DB records
-    paths_to_delete: list[str] = []
-    if job.file_path:
-        paths_to_delete.append(job.file_path)
-    for output_file in job.output_files or []:
-        if output_file.filepath:
-            paths_to_delete.append(output_file.filepath)
+    # job.file_path is the job's storage key PREFIX (f"{job_id}/") — every
+    # source file AND every generated output shares it (export.py writes
+    # outputs to f"{job_id}/output_*.xlsx"), so one prefix delete covers
+    # everything the job ever wrote, on whichever backend is configured
+    # (DECISIONS.md, 2026-09-20).
+    key_prefix = job.file_path
 
     await db.delete(job)
     await db.commit()
 
-    for path in paths_to_delete:
+    if key_prefix:
         try:
-            if os.path.isfile(path):
-                os.remove(path)
-            elif os.path.isdir(path):
-                # Multi-file jobs store file_path as the uploads/{job_id}
-                # directory holding every source file + generated outputs.
-                shutil.rmtree(path, ignore_errors=True)
-        except OSError as exc:
-            logger.warning("Could not delete file %s: %s", path, exc)
+            await storage.delete_prefix(key_prefix)
+        except Exception as exc:
+            logger.warning("Could not delete storage prefix %s: %s", key_prefix, exc)

@@ -58,6 +58,17 @@ def save_upload(file_bytes: bytes, filename: str, upload_dir: str) -> str:
     return filepath
 
 
+def safe_indexed_filename(index: int, filename: str) -> str:
+    """<index>_<safe_name> — original basename kept for traceability but
+    stripped of any path components and characters unsafe in either a local
+    filename or an object storage key. Shared by job_file_path (local paths)
+    and upload.py's object storage key construction, so the two naming
+    schemes can never drift apart."""
+    safe_name = os.path.basename(filename.replace("\\", "/")) or "upload"
+    safe_name = re.sub(r'[<>:"|?*]', "_", safe_name)
+    return f"{index:02d}_{safe_name}"
+
+
 def job_file_path(upload_dir: str, job_id: str, index: int, filename: str) -> str:
     """Destination path for one batch file: upload_dir/<job_id>/<index>_<safe_name>.
 
@@ -68,9 +79,7 @@ def job_file_path(upload_dir: str, job_id: str, index: int, filename: str) -> st
     """
     job_dir = os.path.join(upload_dir, job_id)
     os.makedirs(job_dir, exist_ok=True)
-    safe_name = os.path.basename(filename.replace("\\", "/")) or "upload"
-    safe_name = re.sub(r'[<>:"|?*]', "_", safe_name)
-    return os.path.join(job_dir, f"{index:02d}_{safe_name}")
+    return os.path.join(job_dir, safe_indexed_filename(index, filename))
 
 
 def save_upload_to_job_dir(

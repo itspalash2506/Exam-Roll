@@ -1,9 +1,7 @@
 import logging
-import os
 from json import loads
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +17,7 @@ from app.schemas.schemas import (
     SubjectEntry,
 )
 from app.services.generators.excel_generator import generate_excel
+from app.services import storage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["export"], dependencies=[Depends(require_org)])
@@ -44,6 +43,14 @@ def _load_extracted(job: Job) -> ExtractedDataSchema:
         semester=job.semester,
         exam_name=job.exam_name,
         ai_confidence=job.ai_confidence or 0.0,
+    )
+
+
+def _xlsx_response(data: bytes, download_name: str) -> Response:
+    return Response(
+        content=data,
+        media_type=_XLSX_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
     )
 
 
@@ -74,36 +81,30 @@ async def export_job(
         logger.exception("Excel generation failed for job %s", req.job_id)
         raise HTTPException(status_code=500, detail=f"Excel generation failed: {exc}") from exc
 
-    # Save to uploads/{job_id}/output_{filename}.xlsx
-    out_dir = os.path.join(_settings.upload_dir, req.job_id)
-    os.makedirs(out_dir, exist_ok=True)
+    # Object storage (Cloudflare R2, DECISIONS.md 2026-09-20): generate_excel
+    # already returns bytes — no local temp file to write-then-reread, the
+    # bytes go straight to the configured storage backend.
     safe_stem = req.filename.replace("/", "_").replace("\\", "_")
     out_filename = f"output_{safe_stem}.xlsx"
-    out_path = os.path.join(out_dir, out_filename)
+    out_key = f"{req.job_id}/{out_filename}"
     try:
-        with open(out_path, "wb") as fh:
-            fh.write(xlsx_bytes)
-    except OSError as exc:
-        logger.exception("Could not write output file for job %s", req.job_id)
-        raise HTTPException(status_code=500, detail="Could not write output file") from exc
+        await storage.upload_bytes(xlsx_bytes, out_key)
+    except Exception as exc:
+        logger.exception("Could not store output file for job %s", req.job_id)
+        raise HTTPException(status_code=500, detail="Could not store output file") from exc
 
     file_size_kb = max(1, len(xlsx_bytes) // 1024)
     output_record = OutputFile(
         job_id=req.job_id,
         format="xlsx",
         filename=out_filename,
-        filepath=out_path,
+        filepath=out_key,
         file_size_kb=file_size_kb,
     )
     db.add(output_record)
     await db.commit()
 
-    download_name = f"{safe_stem}.xlsx"
-    return FileResponse(
-        path=out_path,
-        media_type=_XLSX_MEDIA,
-        headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
-    )
+    return _xlsx_response(xlsx_bytes, f"{safe_stem}.xlsx")
 
 
 @router.get("/export/{job_id}/download/{file_id}")
@@ -123,13 +124,8 @@ async def redownload_output(
     output_file = result.scalar_one_or_none()
     if not output_file:
         raise HTTPException(status_code=404, detail="Output file not found")
-    if not os.path.isfile(output_file.filepath):
-        raise HTTPException(status_code=404, detail="File no longer exists on disk")
+    if not await storage.object_exists(output_file.filepath):
+        raise HTTPException(status_code=404, detail="File no longer exists in storage")
 
-    return FileResponse(
-        path=output_file.filepath,
-        media_type=_XLSX_MEDIA,
-        headers={
-            "Content-Disposition": f'attachment; filename="{output_file.filename}"'
-        },
-    )
+    data = await storage.download_bytes(output_file.filepath)
+    return _xlsx_response(data, output_file.filename)

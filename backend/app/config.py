@@ -60,6 +60,19 @@ class Settings(BaseSettings):
     # production because it logs every SQL statement, including student PII.
     sql_echo: bool = False
 
+    # Object storage (Cloudflare R2, DECISIONS.md 2026-09-20): uploaded source
+    # files and generated Excel outputs live here instead of accumulating on
+    # local disk, which is what caused the memory/disk pressure this replaces.
+    # All four empty by default — matches this file's existing pattern (e.g.
+    # groq_api_key) of graceful degradation rather than a hard requirement:
+    # when unset, storage.py falls back to local disk under upload_dir
+    # exactly as before, so local dev and the test suite need no R2 account
+    # at all. Only a real deployment needs these set.
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket_name: str = ""
+
     # Same-origin serving (DECISIONS.md, 2026-09-19): the built frontend
     # (`npm run build` → frontend/dist) is served by this same FastAPI process
     # alongside /api/v1/* and the WebSocket, so the browser sees ONE origin —
@@ -104,6 +117,17 @@ class Settings(BaseSettings):
     @property
     def max_total_batch_bytes(self) -> int:
         return self.max_total_batch_mb * 1024 * 1024
+
+    @property
+    def object_storage_enabled(self) -> bool:
+        return bool(
+            self.r2_account_id and self.r2_access_key_id
+            and self.r2_secret_access_key and self.r2_bucket_name
+        )
+
+    @property
+    def r2_endpoint_url(self) -> str:
+        return f"https://{self.r2_account_id}.r2.cloudflarestorage.com"
 
     @property
     def frontend_dist_path(self) -> Path | None:

@@ -27,3 +27,11 @@ psycopg2-binary>=2.9.9
 # Session auth (DECISIONS.md, 2026-09-19): argon2id password hashing.
 # Never bcrypt (72-byte silent truncation), never a bare hash.
 argon2-cffi>=23.1.0
+
+# Object storage — Cloudflare R2 via its S3-compatible API (DECISIONS.md,
+# 2026-09-20). boto3 is sync; calls run through asyncio.to_thread() the same
+# way this codebase already handles other blocking I/O (Groq, PDF parsing) —
+# no new async library needed. moto mocks the S3 API in-process for tests,
+# so the R2 code path has real automated coverage without live credentials.
+boto3>=1.34.0
+moto[s3]>=5.0.0
