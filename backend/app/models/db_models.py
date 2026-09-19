@@ -1,10 +1,29 @@
 import uuid
 from datetime import datetime, timezone
+# Aliased: ExamSession has columns literally named `date` and `time`-typed
+# ones, and an annotation `Mapped[date]` on an attribute named `date` is the
+# kind of shadowing that resolves differently under PEP 649 than before it.
+from datetime import date as _date, time as _time
+from typing import Any
 
-from sqlalchemy import Boolean, Float, String, Integer, Text, DateTime, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    Float,
+    String,
+    Integer,
+    Text,
+    Time,
+    DateTime,
+    ForeignKey,
+    Index,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.utils.room_capacity import DEFAULT_SEATS_PER_BENCH, room_capacity
 
 
 def _new_uuid() -> str:
@@ -310,6 +329,163 @@ class ExtractedData(Base):
     raw_text_sample: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     job: Mapped["Job"] = relationship("Job", back_populates="extracted_data")
+
+
+# ── Seating planner (WS-H, FUTURE_UNIFIED.md §13.2, §15.1) ──────────────────
+# Rooms and sessions only. The plan itself (SeatingPlan / SeatingPlanRoom /
+# SeatAssignment, migration 0004) and attendance (0005) are later gates —
+# these three tables are what the room library and session setup screens
+# (§15.1, §15.2 steps 1–3) need, and nothing more.
+
+
+class Room(Base):
+    """A physical exam room, modelled as a LIST OF COLUMNS each with its own
+    seat count — not `rows × cols` (§12.1, §15.1).
+
+    The workbook this design comes from has `ROOM - 5 LIBRARY HALL` with
+    columns of 3, 13, 13 and 4 seats, and `ROOM NO. 4` as two blocks of 5 and
+    2 columns. A rectangular model cannot represent either without inventing
+    seats that do not exist, and an invented seat is a candidate sent to a
+    place they cannot sit. The sheet's "Row 1".."Row 5" headers are physical
+    COLUMNS of benches running front-to-back; `seat_columns[].label` keeps
+    whatever the centre calls them so the printed chart matches the room.
+
+    Index convention, stated once and depended on by the allocator (§15.4):
+    `blocked_seats` entries are **1-based on both axes** — `{"col": 1,
+    "seat": 1}` is the first seat of the first column. See
+    utils/room_capacity.py, which owns the capacity arithmetic and the
+    "is this a real seat" predicate.
+
+    A `seats` count is a number of BENCHES; `seats_per_bench` (1–3) is how
+    many candidates share one. Blocking is per bench: a blocked entry removes
+    every place on that bench, which is why §15.1's formula multiplies last.
+    """
+
+    __tablename__ = "rooms"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    building: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Rooms persist across exams; one used in a published plan is deactivated,
+    # never deleted (§15.1), so this flag — not a DELETE — is how a room leaves
+    # the picker.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Display/allocation order of the room library ("Room 1" before "Room 10",
+    # labs last). Ties fall back to name at query time.
+    sort_priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # [{"label": "Row 1", "seats": 6}, …] — order IS the column order.
+    seat_columns: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    # [{"col": 1, "seat": 4}, …] — 1-based, see the class docstring.
+    blocked_seats: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    seats_per_bench: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=DEFAULT_SEATS_PER_BENCH
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @property
+    def capacity(self) -> int:
+        """(Σ seats − |blocked|) × seats_per_bench — §15.1.
+
+        A PROPERTY, not a column: §13.1 rule 5 is that derived numbers are
+        derived. A stored capacity is a number that can disagree with the
+        seats it claims to count, and the first person to notice would be a
+        candidate standing in a room with no seat left.
+
+        SQLAlchemy's generic JSON type deserializes to native Python lists on
+        both SQLite (json.loads over TEXT) and Postgres (asyncpg JSON codec),
+        so this reads identically on either backend. Note that in-place
+        mutation of these lists is not tracked by the ORM (no MutableList) —
+        assign a new list to change them, which is what an editor PATCH does
+        anyway.
+        """
+        # A Room() built in Python still has None in every column whose
+        # default the ORM only applies at INSERT. Falling back to the same
+        # literal the column declares is not a silent default — it is what
+        # the row will hold a moment later — and it keeps a capacity chip in
+        # an unsaved editor from raising.
+        per_bench = self.seats_per_bench
+        if per_bench is None:
+            per_bench = DEFAULT_SEATS_PER_BENCH
+        return room_capacity(self.seat_columns, self.blocked_seats, per_bench)
+
+
+class ExamSession(Base):
+    """One centre day-shift: `(date, shift)` (§13.2, §15.2 step 2).
+
+    Named ExamSession, not Session, to avoid colliding with AuthSession (and
+    with SQLAlchemy's own Session). A session belongs to the CENTRE's day,
+    not to one Exam: §12.1 found P.G. Sem 4 and B.B.LLB Sem 10 sitting in the
+    same building on the same morning, so the papers it carries (see
+    SessionPaper) may come from several different Exam rows.
+    """
+
+    __tablename__ = "exam_sessions"
+    __table_args__ = (
+        UniqueConstraint("org_id", "date", "shift", name="uq_session_org_date_shift"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    date: Mapped[_date] = mapped_column(Date, nullable=False)
+    # "Morning" / "Afternoon" — free text rather than an enum: the label is
+    # printed verbatim on the docket and differs per centre.
+    shift: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Wall-clock times of the sitting ("11 -- 2" on the workbook's dockets).
+    # Nullable: the shift name alone is enough to identify the session.
+    start_time: Mapped[_time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[_time | None] = mapped_column(Time, nullable=True)
+    label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # A student enrolled in >=2 papers of this session (PUT .../papers
+    # detects this on save — §15.2 step 4). Each entry:
+    # {"student_id", "roll_number", "exam_codes": [...], "acknowledged": bool}.
+    # Publishing (F04) is refused while any entry here is unacknowledged —
+    # not yet enforced since publishing doesn't exist yet, but the storage
+    # shape is decided now so F04 doesn't have to re-litigate it.
+    clashes: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+
+
+class SessionPaper(Base):
+    """Which papers sit in one session's slot — the M:N join between
+    ExamSession and SubjectOffering (§13.2, §15.2 step 3). The session's
+    roster is `Enrollment ⋈ SessionPaper`.
+
+    Carries its own `id` and `org_id` rather than being a pure association
+    table, matching Enrollment (the codebase's existing join-table precedent):
+    §13.1 rule 3 wants org_id NOT NULL on every table so Gate M's tenant
+    filter only ever adds a WHERE, never a column, and a surrogate key keeps
+    the row addressable by a single id from the API layer.
+    """
+
+    __tablename__ = "session_papers"
+    __table_args__ = (
+        UniqueConstraint("session_id", "offering_id", name="uq_session_paper"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("exam_sessions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    offering_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("subject_offerings.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
 
 
 class OutputFile(Base):

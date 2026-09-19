@@ -1,6 +1,15 @@
 from enum import StrEnum
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.utils.room_capacity import (
+    DEFAULT_SEATS_PER_BENCH,
+    SEATS_PER_BENCH_CHOICES,
+    as_mappings,
+    find_duplicate_blocked_seats,
+    find_invalid_blocked_seats,
+    room_capacity,
+)
 
 
 # ── Core extracted data ─────────────────────────────────────────────────────
@@ -134,6 +143,123 @@ class UploadResponse(BaseModel):
     job_id: str
     message: str
     ai_insight: AIInsight | None = None
+
+
+# ── Rooms (seating planner, WS-H, FUTURE_UNIFIED.md §15.1) ─────────────────
+# The validation boundary for the room model. Everything downstream — the
+# capacity chip in the editor, the "required seats / available seats" bar in
+# session setup (§15.2), the allocator (§15.4) — assumes a room's JSON is
+# internally consistent. It is consistent because it could not be saved
+# otherwise; that assumption is made true HERE and nowhere else.
+
+
+class SeatColumnSpec(BaseModel):
+    """One physical column of benches. `seats` counts benches down the
+    column; `label` is what the centre calls it on the printed chart
+    ("Row 1" — the sheet's rows ARE columns, see Room's docstring)."""
+
+    label: str = ""
+    seats: int
+
+    @field_validator("seats")
+    @classmethod
+    def at_least_one_seat(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(
+                f"a seat column must have at least 1 seat, got {v} — "
+                "remove the column instead of giving it zero seats"
+            )
+        return v
+
+
+class BlockedSeatSpec(BaseModel):
+    """A bench taken out of service (the `x` cells in the source workbook).
+
+    **1-based on both axes**: `{"col": 1, "seat": 1}` is the first seat of
+    the first column. The allocator reads these with the same base — see
+    utils/room_capacity.py.
+    """
+
+    col: int = Field(ge=1)
+    seat: int = Field(ge=1)
+
+
+class RoomCreate(BaseModel):
+    """Create/replace payload for a Room. Both creation routes in §15.1 —
+    the "generate N identical rooms" dialog and the per-room editor — produce
+    this same shape; there is one room model, not two."""
+
+    name: str = Field(min_length=1, max_length=200)
+    building: str | None = None
+    is_active: bool = True
+    sort_priority: int = 0
+    seat_columns: list[SeatColumnSpec]
+    blocked_seats: list[BlockedSeatSpec] = []
+    seats_per_bench: int = DEFAULT_SEATS_PER_BENCH
+    notes: str | None = None
+
+    @field_validator("seat_columns")
+    @classmethod
+    def at_least_one_column(cls, v: list[SeatColumnSpec]) -> list[SeatColumnSpec]:
+        if not v:
+            raise ValueError(
+                "seat_columns must not be empty — a room with no columns has "
+                "no seats and cannot hold an exam"
+            )
+        return v
+
+    @field_validator("seats_per_bench")
+    @classmethod
+    def known_bench_size(cls, v: int) -> int:
+        if v not in SEATS_PER_BENCH_CHOICES:
+            allowed = ", ".join(str(c) for c in SEATS_PER_BENCH_CHOICES)
+            raise ValueError(f"seats_per_bench must be one of {allowed}, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def blocked_seats_must_be_real_seats(self) -> "RoomCreate":
+        """A blocked seat that names no real seat is silently lost capacity —
+        it would subtract from the total without the allocator ever skipping
+        anything — so it is rejected, naming the offending entry."""
+        columns = as_mappings(self.seat_columns)
+        blocked = as_mappings(self.blocked_seats)
+
+        invalid = find_invalid_blocked_seats(columns, blocked)
+        if invalid:
+            counts = [c["seats"] for c in columns]
+            detail = "; ".join(
+                f"entry {position} (col {col}, seat {seat})"
+                for position, (col, seat) in invalid
+            )
+            raise ValueError(
+                f"blocked_seats references seats this room does not have: {detail}. "
+                f"Columns are 1..{len(counts)} with seat counts {counts}; "
+                "col and seat are both 1-based."
+            )
+
+        duplicates = find_duplicate_blocked_seats(blocked)
+        if duplicates:
+            detail = "; ".join(
+                f"entry {position} (col {col}, seat {seat})"
+                for position, (col, seat) in duplicates
+            )
+            raise ValueError(
+                f"blocked_seats lists the same seat more than once: {detail}. "
+                "A seat is either blocked or it is not; a repeat would make "
+                "capacity disagree with the seats actually skipped."
+            )
+        return self
+
+    @property
+    def capacity(self) -> int:
+        """The same arithmetic Room.capacity uses (one implementation, in
+        utils/room_capacity.py), so the figure the editor shows before saving
+        and the figure the saved room reports can never drift apart."""
+        return room_capacity(
+            as_mappings(self.seat_columns),
+            as_mappings(self.blocked_seats),
+            self.seats_per_bench,
+        )
 
 
 # ── Backward-compat aliases used by scaffold router stubs ──────────────────
