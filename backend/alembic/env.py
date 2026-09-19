@@ -38,7 +38,17 @@ def _sync_database_url() -> str:
     if url.startswith("sqlite+aiosqlite:"):
         return "sqlite:" + url[len("sqlite+aiosqlite:"):]
     if url.startswith("postgresql+asyncpg:"):
-        return "postgresql+psycopg2:" + url[len("postgresql+asyncpg:"):]
+        rest = url[len("postgresql+asyncpg:"):]
+        # asyncpg and psycopg2 use DIFFERENT query-param names for the same
+        # thing — asyncpg wants `ssl=require`, psycopg2 (the standard libpq
+        # convention, and what Neon's own connection string uses) wants
+        # `sslmode=require`. Swapping only the driver prefix and leaving the
+        # query string untouched fails outright against a real TLS-required
+        # host: psycopg2 raises "invalid dsn: invalid connection option
+        # 'ssl'" the moment Alembic tries to connect (found live against
+        # Neon, DECISIONS.md 2026-09-19).
+        rest = rest.replace("ssl=require", "sslmode=require")
+        return "postgresql+psycopg2:" + rest
     # Already a sync URL (or a dialect this project doesn't use yet) — pass
     # through unchanged rather than guessing at a transformation.
     return url

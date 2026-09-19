@@ -257,3 +257,32 @@ connection can ever be reused across a loop boundary in the first place. Session
 DB, in-process, so the minor overhead of not pooling is negligible.
 
 ---
+
+## 2026-09-20 — `asyncpg` and `psycopg2` disagree on the SSL query-param name
+
+**What happened.** Connecting Alembic to a real Neon Postgres database failed immediately with
+`psycopg2.ProgrammingError: invalid dsn: invalid connection option "ssl"`, even though the exact
+same connection string worked perfectly for the app's own driver (`asyncpg`) seconds earlier via a
+direct connection test.
+
+**Why it happened.** `asyncpg` (the app's async driver) expects the SSL setting as `ssl=require`
+in the URL's query string. `psycopg2` (which Alembic's migration runner needs, since Alembic can't
+drive an async engine — see the earlier `env.py` entry) expects the standard libpq name,
+`sslmode=require`, instead. Neon's own connection string uses `sslmode=require` by default — the
+correct form for `psycopg2`, but not for `asyncpg`. `alembic/env.py`'s `_sync_database_url()`
+already swapped the driver prefix (`postgresql+asyncpg:` → `postgresql+psycopg2:`) when deriving
+Alembic's sync URL, but passed the rest of the URL through untouched, so the query string kept
+`asyncpg`'s spelling even after the driver name changed.
+
+**What it would have cost to ignore.** Every migration against real Postgres would fail at the
+connection step, immediately, with an error that names a plausible-looking connection option
+("ssl") rather than pointing at the actual driver mismatch — a confusing first real-Postgres
+experience for anyone following the setup.
+
+**What we decided and why.** `_sync_database_url()` now also translates `ssl=require` →
+`sslmode=require` when converting to the `psycopg2` URL, alongside the driver-prefix swap it
+already did. Verified against the real Neon database: `alembic upgrade head` applied all three
+migrations cleanly, and a direct query confirmed the correct schema landed (12 tables, `org_id`
+NOT NULL, `exam_id`/`college_id` nullable).
+
+---
