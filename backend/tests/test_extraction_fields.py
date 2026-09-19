@@ -4,11 +4,12 @@ per-paper codes, and the §14.4 subject-conflict rule.
 
 FUTURE_UNIFIED.md §14.5 lists five tests. Four are here. The fifth —
 "two uploads of the same college's sheet → second run reports 'N already
-enrolled', zero new Student rows" — needs the `students` and `enrollments`
-tables from migration `0002_exam_model`, which land in P09; it is recorded in
-PROGRESS.md against that prompt rather than written against a schema that does
-not exist yet. The determinism test at the bottom covers the property that
-test would otherwise have relied on.
+enrolled', zero new Student rows" — needed the `students`/`enrollments`
+tables from migration `0002_exam_model`; now that it exists, that test (plus
+the cross-job version of the §14.4 conflict rule, which needs a real
+SubjectOffering row to conflict against) lives in test_exam_model.py. The
+determinism test at the bottom of this file still stands — it covers the
+property the re-upload test relies on staying true.
 """
 import json
 from pathlib import Path

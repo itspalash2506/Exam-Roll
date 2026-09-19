@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Float, String, Integer, Text, DateTime, ForeignKey
+from sqlalchemy import Boolean, Float, String, Integer, Text, DateTime, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -80,8 +80,134 @@ class AuthSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+# ── Exam model (WS-G, FUTURE_UNIFIED.md §13) ─────────────────────────────────
+# The relational bridge extraction needs before the seating planner (and
+# later features) can exist: today's pipeline only ever writes JSON blobs
+# (ExtractedData.students_json/subjects_json) — a roster query like
+# "Enrollment JOIN SessionPaper" has nothing to run against without real
+# rows. §13.1's design rules, reproduced here rather than re-derived:
+#   1. Identity of a paper is (exam, exam_code), NEVER the subject name —
+#      names repeat across schemes, courses and years.
+#   2. Identity of a student is (org, roll_number).
+#   3. Every table here carries org_id NOT NULL from creation (0002 adds no
+#      data to backfill into these six tables — see DECISIONS.md, no
+#      historical-data-backfill entry, 2026-09-19).
+
+
+class College(Base):
+    """Where a student is enrolled — distinct from Organization (the exam
+    CENTRE). §12.1: the workbook this design is based on lists ten colleges
+    under one centre, which is the evidence the tenant is a centre, not a
+    college."""
+
+    __tablename__ = "colleges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    short_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+
+class Course(Base):
+    __tablename__ = "courses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class Exam(Base):
+    __tablename__ = "exams"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    programme_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    semester: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sticker_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")  # draft|active|closed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class SubjectOffering(Base):
+    """A paper within one exam. Identity is (org, exam, exam_code) — see the
+    module-level note above. `subject_name` deliberately has no UNIQUE
+    constraint of its own: the same name can legitimately appear on two
+    different exam_codes (different schemes/years), and a NAME conflict on
+    the SAME exam_code is recorded, not merged (§14.4 — see
+    processor.py's persisting_rows)."""
+
+    __tablename__ = "subject_offerings"
+    __table_args__ = (
+        UniqueConstraint("org_id", "exam_id", "exam_code", name="uq_offering_org_exam_code"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    exam_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("exams.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    exam_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    course_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True
+    )
+    subject_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    paper_no: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    group_label: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    scheme_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class Student(Base):
+    """Identity is (org, roll_number) — §13.1 rule 2. `roll_sort_key` is
+    computed once at insert (utils/roll_sort.py) so every future query can
+    `ORDER BY roll_sort_key` and get the same order a numeric-aware sort
+    would give, without re-deriving it per query."""
+
+    __tablename__ = "students"
+    __table_args__ = (
+        UniqueConstraint("org_id", "roll_number", name="uq_student_org_roll"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    roll_number: Mapped[str] = mapped_column(String(30), nullable=False)
+    roll_sort_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    college_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("colleges.id", ondelete="SET NULL"), nullable=True
+    )
+    course_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="regular")
+    admission_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class Job(Base):
     __tablename__ = "jobs"
+    # ix_jobs_org_created backs list_jobs' `WHERE org_id = :org_id ORDER BY
+    # created_at DESC` — declared here (not just as a raw migration op) so
+    # the ORM metadata matches the DB and a future autogenerate diff doesn't
+    # propose dropping it as drift (found the hard way while writing 0002 —
+    # DECISIONS.md, 2026-09-19).
+    __table_args__ = (Index("ix_jobs_org_created", "org_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
     # NOT NULL and indexed — a nullable org_id would reintroduce exactly the
@@ -93,6 +219,17 @@ class Job(Base):
     )
     created_by: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Which exam/college this attestation sheet is for — chosen by the
+    # uploader (§14.3's picker), never guessed from the sheet itself. Both
+    # nullable: an existing job predating this column, or a batch uploaded
+    # before the picker is enforced client-side, is not retroactively
+    # assigned one (DECISIONS.md, 2026-09-19 — no historical-data backfill).
+    exam_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("exams.id", ondelete="SET NULL"), nullable=True
+    )
+    college_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("colleges.id", ondelete="SET NULL"), nullable=True
     )
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -130,6 +267,37 @@ class Job(Base):
     output_files: Mapped[list["OutputFile"]] = relationship(
         "OutputFile", back_populates="job", cascade="all, delete-orphan"
     )
+
+
+class Enrollment(Base):
+    """A student's enrollment in one paper. Upserted by processor.py's
+    persisting_rows stage — a re-upload of the same sheet resolves to the
+    same (student_id, offering_id) pair and is reported as "already
+    enrolled" rather than duplicated (§14.5)."""
+
+    __tablename__ = "enrollments"
+    __table_args__ = (
+        UniqueConstraint("student_id", "offering_id", name="uq_enrollment_student_offering"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    student_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    offering_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("subject_offerings.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Traceability: which upload created/last-confirmed this enrollment.
+    source_job_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    # A per-enrollment override of the student's general status (e.g. ATKT
+    # for this one paper only) — null means "use Student.status".
+    status_override: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class ExtractedData(Base):

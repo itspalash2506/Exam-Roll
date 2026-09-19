@@ -4,13 +4,14 @@ import os
 import shutil
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_user, require_org
 from app.config import get_settings
 from app.database import AsyncSessionLocal, get_db
-from app.models.db_models import Job, User
+from app.models.db_models import College, Exam, Job, User
 from app.schemas.schemas import UploadResponse
 from app.services.pipeline.processor import processor
 from app.utils.file_utils import detect_file_type, stream_upload_to_job_dir
@@ -37,6 +38,13 @@ def _batch_summary_name(names: list[str]) -> str:
 async def upload_file(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
+    # §14.3's picker — optional for now (an upload predating the picker, or
+    # a caller that hasn't adopted it, is still valid; DECISIONS.md,
+    # 2026-09-19). When given, must belong to the uploader's own org: never
+    # trust an id from the client without checking it against org_id, or an
+    # upload could get silently attached to another tenant's exam.
+    exam_id: str | None = Form(None),
+    college_id: str | None = Form(None),
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -47,6 +55,18 @@ async def upload_file(
             status_code=400,
             detail=f"{len(files)} files exceeds the {_settings.max_batch_files}-file batch limit",
         )
+    if exam_id is not None:
+        result = await db.execute(
+            select(Exam.id).where(Exam.id == exam_id, Exam.org_id == user.org_id)
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=400, detail="Unknown exam_id")
+    if college_id is not None:
+        result = await db.execute(
+            select(College.id).where(College.id == college_id, College.org_id == user.org_id)
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=400, detail="Unknown college_id")
 
     job_id = str(uuid.uuid4())
     job_dir = os.path.join(_settings.upload_dir, job_id)
@@ -90,6 +110,8 @@ async def upload_file(
         id=job_id,
         org_id=user.org_id,
         created_by=user.id,
+        exam_id=exam_id,
+        college_id=college_id,
         filename=_batch_summary_name(names),
         file_type=file_types[0] if len(set(file_types)) == 1 else "mixed",
         file_path=os.path.join(_settings.upload_dir, job_id),

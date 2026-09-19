@@ -6,7 +6,7 @@ import traceback
 
 from sqlalchemy import select
 
-from app.models.db_models import ExtractedData, Job
+from app.models.db_models import Enrollment, ExtractedData, Job, Student, SubjectOffering
 from app.schemas.schemas import (
     StudentRecord,
     StudentStatus,
@@ -16,6 +16,7 @@ from app.schemas.schemas import (
 from app.services.ai.classifier import classify_document
 from app.services.ai.extractor import extract_students_ai, validate_extraction
 from app.utils.file_utils import detect_file_type, validate_size_bytes
+from app.utils.roll_sort import roll_sort_key
 from app.utils.subject_utils import sort_subjects
 from app.websocket_manager import manager
 
@@ -43,6 +44,7 @@ STAGE_IDS = [
     "matching",
     "validating_data",
     "saving",
+    "persisting_rows",
 ]
 
 STAGE_LABELS = {
@@ -55,6 +57,7 @@ STAGE_LABELS = {
     "matching": "Matching AI labels to codes",
     "validating_data": "Validating records",
     "saving": "Saving results",
+    "persisting_rows": "Updating student & subject records",
 }
 
 
@@ -235,6 +238,124 @@ def _combined_text_sample(per_file_results: list[dict], max_chars: int = 3000) -
         for r in per_file_results
     ]
     return "\n\n".join(sections)[:max_chars]
+
+
+async def persist_relational_rows(
+    db_session,
+    job: Job,
+    students: list[StudentRecord],
+    subject_entries: list[SubjectEntry],
+) -> tuple[int, list[tuple[str, list[str]]]]:
+    """Upsert Student / SubjectOffering / Enrollment for one job's extraction
+    result (WS-G, FUTURE_UNIFIED.md §13.5's persisting_rows stage).
+
+    Only called when job.exam_id is set — there's nothing to attach an
+    offering/enrollment to otherwise (the caller checks this).
+
+    Returns (already_enrolled_count, offering_name_conflicts). A conflict is
+    the SAME exam_code already existing under this exam with a DIFFERENT
+    name — the cross-job version of §14.4's rule (the within-batch version
+    is apply_ai_subject_labels/merge_subject_maps, which operates on an
+    in-memory map since no SubjectOffering row exists yet at that point).
+    Neither name is silently picked; the existing name is kept and the
+    conflict is recorded for review, exactly like the within-batch case.
+    """
+    org_id = job.org_id
+    exam_id = job.exam_id
+
+    # 1. Upsert SubjectOffering, keyed on (org, exam, exam_code) — identity
+    # of a paper is the exam_code, never the name (§13.1 rule 1). Falls back
+    # to the extraction's own `code` when no explicit university exam_code
+    # was captured (§14.2 — that mapping is entered once per exam in a
+    # future Paper Setup screen; until then the extracted code stands in).
+    offering_id_by_code: dict[str, str] = {}
+    conflicts: list[tuple[str, list[str]]] = []
+    for subj in subject_entries:
+        exam_code = subj.exam_code or subj.code
+        result = await db_session.execute(
+            select(SubjectOffering).where(
+                SubjectOffering.org_id == org_id,
+                SubjectOffering.exam_id == exam_id,
+                SubjectOffering.exam_code == exam_code,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing is None:
+            offering = SubjectOffering(
+                org_id=org_id,
+                exam_id=exam_id,
+                exam_code=exam_code,
+                subject_name=subj.name or "",
+                paper_no=subj.paper_no,
+                group_label=subj.group_label,
+            )
+            db_session.add(offering)
+            await db_session.flush()
+            offering_id_by_code[subj.code] = offering.id
+        else:
+            if subj.name and existing.subject_name and subj.name != existing.subject_name:
+                conflicts.append((exam_code, [existing.subject_name, subj.name]))
+            elif subj.name and not existing.subject_name:
+                existing.subject_name = subj.name
+            offering_id_by_code[subj.code] = existing.id
+
+    # 2. Upsert Student, keyed on (org, roll_number) — §13.1 rule 2.
+    student_id_by_roll: dict[str, str] = {}
+    for rec in students:
+        result = await db_session.execute(
+            select(Student).where(
+                Student.org_id == org_id, Student.roll_number == rec.roll_number
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing is None:
+            student = Student(
+                org_id=org_id,
+                roll_number=rec.roll_number,
+                roll_sort_key=roll_sort_key(rec.roll_number),
+                name=rec.name or "",
+                college_id=job.college_id,
+                status=str(rec.status),
+                admission_year=rec.admission_year,
+            )
+            db_session.add(student)
+            await db_session.flush()
+            student_id_by_roll[rec.roll_number] = student.id
+        else:
+            student_id_by_roll[rec.roll_number] = existing.id
+
+    # 3. Upsert Enrollment per (student, offering) pair; count how many
+    # already existed from a prior upload — this is a DIFFERENT number from
+    # the "deduplicating" stage's within-batch duplicate-pair count (that
+    # answers "how many repeats were in THIS upload"; this answers "how many
+    # of these enrollments did we already know about").
+    already_enrolled = 0
+    for rec in students:
+        student_id = student_id_by_roll[rec.roll_number]
+        for code in rec.subjects:
+            offering_id = offering_id_by_code.get(code)
+            if offering_id is None:
+                continue  # defensive: shouldn't happen, code came from subject_entries
+            result = await db_session.execute(
+                select(Enrollment).where(
+                    Enrollment.student_id == student_id,
+                    Enrollment.offering_id == offering_id,
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is not None:
+                already_enrolled += 1
+                existing.source_job_id = job.id  # most recent upload wins traceability
+                continue
+            db_session.add(Enrollment(
+                org_id=org_id,
+                student_id=student_id,
+                offering_id=offering_id,
+                source_job_id=job.id,
+            ))
+
+    await db_session.flush()
+    return already_enrolled, conflicts
 
 
 class DocumentProcessor:
@@ -625,6 +746,51 @@ class DocumentProcessor:
             "saving", "complete",
             detail=f"{len(students)} record(s) saved", count=len(students),
         )
+
+        # ── STAGE: persisting_rows (WS-G, §13.5) ───────────────────────────
+        # Upserts the relational Student/SubjectOffering/Enrollment rows the
+        # seating planner and later features need — a roster query has
+        # nothing to run against while extraction only ever writes the
+        # students_json/subjects_json blob above.
+        await _emit("persisting_rows", "active")
+        if job.exam_id is None:
+            # No exam chosen at upload (§14.3's picker) — nothing to attach
+            # an offering/enrollment to. Not an error: most uploads today
+            # predate the picker, and this is the honest, expected state for
+            # them rather than a silently-skipped failure.
+            await _emit(
+                "persisting_rows", "complete",
+                detail="No exam selected for this upload — skipped",
+            )
+        else:
+            already_enrolled, offering_conflicts = await persist_relational_rows(
+                db_session, job, students, subject_entries,
+            )
+            await db_session.commit()
+
+            persist_warning = None
+            if offering_conflicts:
+                sample = "; ".join(
+                    f"{code} ({' / '.join(names)})" for code, names in offering_conflicts[:5]
+                )
+                persist_warning = (
+                    f"{len(offering_conflicts)} paper(s) already exist under this "
+                    f"exam with a different name ({sample}) — kept the existing "
+                    f"name, confirm before relying on it."
+                )
+                file_warnings.append(persist_warning)
+                job.processing_warnings = json.dumps(file_warnings)
+                await db_session.commit()
+
+            persist_detail = (
+                f"{already_enrolled} already enrolled" if already_enrolled
+                else "All new enrollments"
+            )
+            await _emit(
+                "persisting_rows", "complete",
+                detail=persist_detail, count=already_enrolled,
+                warning=persist_warning,
+            )
 
 
 # ── Module-level convenience instance ────────────────────────────────────────
