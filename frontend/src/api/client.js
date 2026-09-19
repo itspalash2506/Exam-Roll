@@ -26,8 +26,26 @@ const api = axios.create({
 // without an unwanted redirect loop.
 const AUTH_ENDPOINTS = ['/auth/login', '/auth/me']
 
+// No ExamRoll API response is ever HTML — every real endpoint returns JSON
+// or an xlsx blob. An HTML body with a 2xx status means the request never
+// actually reached the backend (a misconfigured VITE_API_BASE_URL landing on
+// a static host's own page, a same-origin SPA catch-all swallowing a typo'd
+// path, ...) — axios otherwise treats that as a "successful" response, and
+// calling code then fails confusingly trying to read JSON fields off an
+// HTML string (P1-24).
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    const contentType = res.headers?.['content-type'] || ''
+    if (contentType.includes('text/html')) {
+      return Promise.reject(
+        new Error(
+          `Expected a response from the API but got an HTML page instead (${res.config?.url}). ` +
+          'This usually means the app is misconfigured to talk to the wrong server.',
+        ),
+      )
+    }
+    return res
+  },
   (err) => {
     const path = err.config?.url || ''
     const isAuthEndpoint = AUTH_ENDPOINTS.some((p) => path.includes(p))

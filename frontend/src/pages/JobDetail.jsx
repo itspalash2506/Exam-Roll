@@ -14,6 +14,19 @@ import Button from '../components/common/Button.jsx'
 import LoadingSkeleton from '../components/common/LoadingSkeleton.jsx'
 import { formatDate } from '../utils/formatters.js'
 
+// v5 signature: the callback receives the Query object, not the data
+// directly (that was v4) — `query.state.data` is where the payload
+// actually is. Passing the old v4-shaped callback meant `data` here was
+// always the (truthy) Query object, `data.status` was always undefined,
+// and refetchInterval never returned false — polling never stopped
+// after the job finished (P1-20). Exported for a direct unit test.
+export function getJobRefetchInterval(query) {
+  const jobStatus = query.state.data?.status
+  if (!jobStatus) return 3000
+  if (jobStatus === 'completed' || jobStatus === 'failed') return false
+  return 3000
+}
+
 export default function JobDetail() {
   const { jobId } = useParams()
   const { status: wsStatus, progress, message } = useJobStatus(jobId)
@@ -31,11 +44,7 @@ export default function JobDetail() {
       const res = await getJob(jobId)
       return res.data
     },
-    refetchInterval: (data) => {
-      if (!data) return 3000
-      if (data.status === 'completed' || data.status === 'failed') return false
-      return 3000
-    },
+    refetchInterval: getJobRefetchInterval,
   })
 
   const isDone = job?.status === 'completed'

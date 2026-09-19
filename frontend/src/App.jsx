@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider } from './context/AuthContext.jsx'
 import { JobProvider } from './context/JobContext.jsx'
+import ErrorBoundary from './components/common/ErrorBoundary.jsx'
 import PageWrapper from './components/layout/PageWrapper.jsx'
 import RequireAuth from './components/layout/RequireAuth.jsx'
 import Dashboard from './pages/Dashboard.jsx'
@@ -42,19 +43,21 @@ export default function App() {
                 error: { iconTheme: { primary: '#B4442E', secondary: '#fff' } },
               }}
             />
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route element={<RequireAuth />}>
-                <Route element={<PageWrapper />}>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/upload" element={<Upload />} />
-                  <Route path="/jobs/:jobId" element={<JobDetail />} />
-                  <Route path="/history" element={<History />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="*" element={<NotFound />} />
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route element={<RequireAuth />}>
+                  <Route element={<PageWrapper />}>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/upload" element={<Upload />} />
+                    <Route path="/jobs/:jobId" element={<JobDetail />} />
+                    <Route path="/history" element={<History />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="*" element={<NotFound />} />
+                  </Route>
                 </Route>
-              </Route>
-            </Routes>
+              </Routes>
+            </ErrorBoundary>
           </BrowserRouter>
         </JobProvider>
       </AuthProvider>
