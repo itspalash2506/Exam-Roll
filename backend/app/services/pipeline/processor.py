@@ -106,6 +106,33 @@ def merge_subject_maps(
     return merged, [c.as_warning() for c in conflicts], conflicts
 
 
+def apply_ai_subject_labels(
+    merged_subjects: dict[str, str],
+    ai_subjects_detected: list[SubjectEntry],
+) -> tuple[dict[str, str], set[str]]:
+    """Let the AI LABEL a subject code rule-based extraction already found;
+    never let it INVENT a new one (P0-10, DECISIONS.md 2026-09-19).
+
+    Returns (merged_with_ai_names, invented_codes). The caller counts and
+    warns about invented_codes — silently dropping them would repeat the
+    P0-1 failure class (a check that discards bad data and says nothing).
+
+    Before this function existed, the matching stage did `merged[code] =
+    name` unconditionally on any code the AI returned, so a hallucinated
+    subject code became a real column in the delivered workbook with zero
+    signal it was never on the document.
+    """
+    merged = dict(merged_subjects)
+    invented: set[str] = set()
+    for ai_sub in ai_subjects_detected:
+        if ai_sub.code not in merged:
+            invented.add(ai_sub.code)
+            continue
+        if ai_sub.name:
+            merged[ai_sub.code] = ai_sub.name  # AI name wins, for a code we already found
+    return merged, invented
+
+
 def summarize_status_warnings(students: list[StudentRecord]) -> list[str]:
     """Warn about every student whose status was defaulted or unrecognised.
 
@@ -514,21 +541,18 @@ class DocumentProcessor:
         # ── STAGE: matching ──────────────────────────────────────────────────
         await _emit("matching", "active")
 
-        # Rule-based subjects as the base; AI subject names take priority
-        merged: dict[str, str] = dict(merged_subjects)
-        for ai_sub in ai_insight.subjects_detected:
-            if ai_sub.name:
-                merged[ai_sub.code] = ai_sub.name  # AI name wins
-            elif ai_sub.code not in merged:
-                merged[ai_sub.code] = ""
+        merged, ai_invented_codes = apply_ai_subject_labels(
+            merged_subjects, ai_insight.subjects_detected
+        )
 
         # If rule-based found no students at all, try AI extraction as fallback
+        rejected_roll_count = 0
         if not students and merged:
             subject_entries_for_ai = [
                 SubjectEntry(code=c, name=n) for c, n in merged.items()
             ]
             try:
-                students = await asyncio.to_thread(
+                students, rejected_roll_count = await asyncio.to_thread(
                     extract_students_ai,
                     text_sample,
                     ai_insight.document_type,
@@ -542,12 +566,28 @@ class DocumentProcessor:
         ai_named_codes = {s.code for s in ai_insight.subjects_detected if s.name}
         labelled_count = len(ai_named_codes & set(merged.keys()))
 
+        matching_warnings: list[str] = []
+        if ai_invented_codes:
+            sample = ", ".join(sorted(ai_invented_codes)[:5])
+            matching_warnings.append(
+                f"AI suggested {len(ai_invented_codes)} subject code(s) not found "
+                f"in the document ({sample}) — ignored, not added as columns."
+            )
+        if rejected_roll_count:
+            matching_warnings.append(
+                f"AI extraction returned {rejected_roll_count} malformed roll "
+                f"number(s) — rejected, not stored."
+            )
+        matching_warning = "; ".join(matching_warnings) or None
+        file_warnings.extend(matching_warnings)
+
         subject_entries = sort_subjects(merged)
         job.total_students = len(students)
         await db_session.flush()
         await _emit(
             "matching", "complete",
             detail=f"{labelled_count} subjects labelled", count=labelled_count,
+            warning=matching_warning,
         )
 
         # ── STAGE: validating_data ───────────────────────────────────────────
