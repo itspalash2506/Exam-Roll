@@ -74,6 +74,19 @@ async def setup_test_db(test_engine, test_session_factory, tmp_path_factory):
     test_upload_dir = str(tmp_path_factory.mktemp("uploads"))
     settings = get_settings()
     settings.upload_dir = test_upload_dir
+    # Force local-disk storage for the whole session regardless of what's in
+    # .env — a real .env now carries live R2 credentials (needed to verify
+    # the R2 backend against a real bucket), and Settings reads .env
+    # unconditionally. Without this reset, every test that exercises
+    # /api/v1/upload or /api/v1/export was silently writing to the real
+    # production R2 bucket over the network instead of test_upload_dir.
+    # Individual tests that want R2 coverage opt back in per-test via the
+    # r2_settings/moto_bucket fixtures in test_storage.py, which monkeypatch
+    # (and auto-revert) these same four fields (DECISIONS.md, 2026-09-20).
+    settings.r2_account_id = ""
+    settings.r2_access_key_id = ""
+    settings.r2_secret_access_key = ""
+    settings.r2_bucket_name = ""
 
     database.engine = test_engine
     database.AsyncSessionLocal = test_session_factory

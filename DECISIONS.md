@@ -377,3 +377,51 @@ two-layer approach (automated logic tests + one live check) already used for the
 migration.
 
 ---
+
+## Live R2 + Neon verification, and a test-isolation bug it surfaced (2026-09-20)
+
+**Problem**: ran the same live end-to-end sequence used for local-disk mode (upload the real
+167-student attestation PDF → process → export → re-download → delete) against genuinely real
+Neon Postgres and real Cloudflare R2, using the credentials the user provided in `.env`. Every
+step passed: the source file landed at the expected R2 key, extraction matched the pinned
+167-student/15-subject count, the exported `.xlsx` round-tripped byte-identical on re-download,
+`DELETE /api/v1/jobs/{id}` returned 204, and both the source and output keys were confirmed gone
+from R2 afterward (direct `object_exists` calls, both `False`).
+
+**A follow-up full `pytest` run then failed** one assertion in `test_storage.py`
+(`test_dispatch_uses_local_backend_when_r2_unconfigured`) that documents an assumption: "this
+test suite never sets R2 credentials, so `object_storage_enabled` is already `False`." That
+assumption broke the moment `.env` gained real R2 credentials, because `Settings` (`config.py`)
+loads `.env` unconditionally — nothing in the test suite ever forced R2 back off.
+
+**Why this was a bigger problem than one failing assertion**: `conftest.py`'s session-scoped
+`setup_test_db` fixture isolates `upload_dir` into a tmp directory, but never touched the four
+R2 settings. That meant `object_storage_enabled` was `True` for the *entire* test session, so
+every test hitting `/api/v1/upload` or `/api/v1/export` through the app (not just
+`test_storage.py`) — `test_routers.py`, `test_tenancy.py`, `test_exam_model.py`,
+`test_extraction_correctness.py` — was routing through the real `_r2` backend and writing to the
+live production bucket over the network on every `pytest` run, not a mock. Listing the bucket
+confirmed it: 60 stray objects (tiny placeholder test PDFs and their generated `.xlsx` outputs,
+all timestamped from one earlier test run) were sitting in `examroll-uploads`.
+
+**Fix**: `setup_test_db` now also resets all four `r2_*` settings to `""` at session start,
+regardless of what `.env` contains, so local disk is the default for the whole suite again. Tests
+that specifically want R2 coverage still get it: `test_storage.py`'s `r2_settings`/`moto_bucket`
+fixtures `monkeypatch` those same four fields back on per-test, and `monkeypatch` auto-reverts
+after each test — so they compose correctly with the new session-level reset instead of fighting
+it. Confirmed by re-running the full suite twice (134 passed, 0 failed) and listing the real
+bucket immediately after: 0 objects both times.
+
+**Cleanup**: the 60 stray pre-existing objects were confirmed to be nothing but test fixtures
+(all under 25 bytes, or generated `.xlsx` files from the same test run) and deleted from the real
+bucket after explicit user confirmation, since a bulk delete against production infrastructure is
+exactly the kind of action this project treats as requiring a stop-and-ask rather than
+proceeding autonomously.
+
+**Lesson for future phases**: any time real credentials get written to `.env` for a live
+verification step, immediately re-run the full test suite and check whether a previously-safe
+"this is always false/unset in tests" assumption just became false — `.env`-based settings are
+session-global, and a session-scoped test fixture that isolates one field (`upload_dir`) can
+silently fail to isolate a sibling field (`r2_*`) that gates the same code path.
+
+---

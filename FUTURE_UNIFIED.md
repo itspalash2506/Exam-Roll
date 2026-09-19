@@ -4007,35 +4007,372 @@ as they bite.
 
 ---
 
-## 23. Open questions still outstanding
+## 23. Open questions
 
-Answered on 2026-09-18: sequencing (pilot first), seating varies by room/exam, status is on the
-attestation sheet, clerk enters attendance per room per session, multi-scheme/multi-exam-code
-support required. The workbook answered: tenant type (centre), docket shape (per paper), room
-shape (columns), seat marking (`x`), sticker format, claim rate (₹200), Hindi labels, roll format.
+Three parts: what is already decided (§23.1), what is still outstanding (§23.2), and the form to
+write answers into (§23.3). **None of the open items blocks Gate P.**
 
-Still open — each is a small decision, none blocks Gate P:
+**The flow for answering one.**
 
-| # | Question | Blocks |
-|---|---|---|
-| Q3 | Is the session timetable typed in, or importable (university time-table PDF)? | F session setup |
-| Q4 | Seat labelling on doors: `Row 1 / Seat 4`, `R1-S4`, or bench numbers? | O1, O7 |
-| Q5 | When `seats_per_bench > 1`: all occupants different papers, or only neighbours? Front/back? | allocator default |
-| Q6 | Do Ex-students appear on attestation sheets, or only ATKT? | status enum wording |
-| Q7 | Mandatory UFM fields and category list; is a booklet number recorded? | O2, O4, §16.2 |
-| Q8 | Retention years for tier 3; legal hold rules | §16.5 default |
-| Q9 | May a clerk publish a plan, or only the superintendent? Two-person rule for UFM? | §16.4 |
-| Q10 | Any non-numeric roll formats at this centre (B.B.LLB?) | §18 sort default |
-| Q11 | Print names on attendance sheets / door notices? | O2, O7 |
-| Q12 | Domain purchased? Neon vs Supabase? Pilot hosted or on-premise? Same-origin static serving acceptable? | Gate M topology |
-| Q13 | Keep the warm-editorial palette for seating screens? (recommended) | §15.6 |
-| Q14 | Largest session: candidates / papers / rooms | grid UI sizing |
-| Q15 | PDF for O1/O2/O4/O5 inside Gate F, or later? | F scope |
-| Q16 | Offline operation on exam day required? | attendance architecture |
-| Q17 | Attendance cut-off / late-entry flag? | §16.1 |
-| Q18 | `Room 4` in the sample: one room with 7 columns, or two rooms (`4-A`, `4-B`)? | fixture in §20 |
-| Q19 | The `Summ` "All Sub" row (Hawabagh M.A., 60 candidates across all subjects): is a per-college aggregate row required, or is it a shortcut to retire? | O6 |
-| Q20 | Does the claim (`Amount`) count *enrolled* or *present* candidates? | O6 |
+1. **Write the answer in §23.3**, in that question's block. That is the only place to write —
+   §23.2 is an index, not a writing surface.
+2. **Promote a one-line summary to §23.1** with the date and who answered it, and delete the row
+   from §23.2. Never delete the question itself — the record of when a thing was decided is what
+   stops it being re-litigated three sessions later.
+3. **Add a `DECISIONS.md` entry** for the four answers marked **⚑**. Those are design forks, not
+   preferences, and the *why* needs the full
+   What happened → Why → Cost of ignoring → What we decided shape.
+4. **Paste the answer into the prompt** when running a `PROMPTS.md` prompt marked `[needs answer]`.
+   A session that reads `[needs answer]` with nothing in front of it will stall or guess.
+
+---
+
+### 23.1 Answered
+
+| # | Question | Answer | Answered by | Date |
+|---|---|---|---|---|
+| — | Sequencing: pilot first, or multi-centre first? | Pilot first | User | 2026-09-18 |
+| — | Does seating arrangement vary by room/exam? | Yes — varies; strategy must be configurable | User | 2026-09-18 |
+| — | Where does candidate status come from? | It is printed on the attestation sheet | User | 2026-09-18 |
+| — | Who enters attendance, and at what grain? | Clerk, per room per session | User | 2026-09-18 |
+| — | Is multi-scheme / multi-exam-code support required? | Yes — required | User | 2026-09-18 |
+| — | What is the tenant: a college or a centre? | An exam **centre**; students belong to colleges | `MSW etc A.xlsx` | 2026-09-18 |
+| — | What shape is the docket? | Per (paper, session) — not per student | `MSW etc A.xlsx` | 2026-09-18 |
+| — | What shape is a room? | Columns of unequal length, not `rows × cols` | `MSW etc A.xlsx` | 2026-09-18 |
+| — | How are empty/blocked seats marked? | `x` | `MSW etc A.xlsx` | 2026-09-18 |
+| — | Sticker format? | 5 across, 20 per A4 page, in seating order | `MSW etc A.xlsx` | 2026-09-18 |
+| — | Claim rate? | ₹200 per candidate, as a referenced rate cell | `MSW etc A.xlsx` | 2026-09-18 |
+| — | Hindi label encoding? | Two encodings in the source; app emits **Unicode only** | `MSW etc A.xlsx` | 2026-09-18 |
+| — | Roll number format? | 8-digit numeric, year-prefixed; stored as text | `MSW etc A.xlsx` | 2026-09-18 |
+| Q12 | Same-origin static serving acceptable? | **Yes — chosen.** FastAPI serves `frontend/dist` alongside `/api/v1/*`; deletes the cross-site cookie problem without DNS | `DECISIONS.md` | 2026-09-19 |
+| Q12 | Custom domain purchased? | **No — deliberately deferred.** Remains a valid upgrade path; only deployment config changes if adopted | `DECISIONS.md` | 2026-09-19 |
+| Q12 | Neon or Supabase? | **Neon.** All three migrations verified against the real Neon database. (`DECISIONS.md` entries dated 2026-09-19 still say "Supabase" — stale, written before the Neon work landed) | `DECISIONS.md` | 2026-09-20 |
+
+---
+
+### 23.2 Still open — index
+
+Write the answers in §23.3, not here. ⚑ = needs a `DECISIONS.md` entry when answered.
+
+| # | Question | Blocks | Who answers |
+|---|---|---|---|
+| Q3 | Is the session timetable typed in, or importable (university time-table PDF)? | F02/F03 session setup | Centre |
+| Q4 | Seat labelling on doors: `Row 1 / Seat 4`, `R1-S4`, or bench numbers? | F06 (O1, O7) | Centre |
+| Q5 ⚑ | When `seats_per_bench > 1`: all occupants different papers, or only neighbours? Front/back? | **F04** allocator default | Centre |
+| Q6 | Do Ex-students appear on attestation sheets, or only ATKT? | status enum wording | Centre / real sheets |
+| Q7 | Mandatory UFM fields and category list; is a booklet number recorded? | **F07** (O2, O4, §16.2) | Centre |
+| Q8 ⚑ | Retention years for tier 3; legal hold rules | **M04** (§16.5 default) | You + whoever signs off the privacy policy |
+| Q9 | May a clerk publish a plan, or only the superintendent? Two-person rule for UFM? | **F07** (§16.4) | Centre |
+| Q10 | Any non-numeric roll formats at this centre (B.B.LLB?) | §18 sort default | Answerable from the real sheets already in hand |
+| Q11 | Print names on attendance sheets / door notices? | **F08** (O2, O7) | Centre |
+| Q12 | Pilot hosted, or on-premise at the centre? *(residual — the rest of Q12 is answered above)* | Gate M topology | You |
+| Q13 | Keep the warm-editorial palette for seating screens? (recommended) | §15.6 | You |
+| Q14 | Largest session: candidates / papers / rooms | F05 grid UI sizing | Centre |
+| Q15 | PDF for O1/O2/O4/O5 inside Gate F, or later? | **F11** scope | You |
+| Q16 ⚑ | Offline operation on exam day required? | **F07/F08** attendance architecture | Centre |
+| Q17 | Attendance cut-off / late-entry flag? | §16.1 | Centre |
+| Q18 | `Room 4` in the sample: one room with 7 columns, or two rooms (`4-A`, `4-B`)? | fixture in §20 | Centre / workbook |
+| Q19 | The `Summ` "All Sub" row (Hawabagh M.A., 60 candidates across all subjects): is a per-college aggregate row required, or is it a shortcut to retire? | **F10** (O6) | Centre |
+| Q20 ⚑ | Does the claim (`Amount`) count *enrolled* or *present* candidates? | **F10** (O6) | Centre |
+
+**Ask Q16 before F07 is specified.** If offline entry is required it is not a feature flag — it
+reshapes attendance into local queueing plus conflict resolution, and retrofitting that after F07
+means rewriting it.
+
+**Q20 is money.** It determines what O6 bills the university. Get it in writing.
+
+Q3–Q7, Q9, Q11, Q14, Q16–Q20 are all questions for the centre — one conversation covers them.
+Q13 and Q15 can be answered today; Q10 and Q18 are answerable from data already in hand.
+
+---
+
+### 23.3 Answer form
+
+Tick an option or write free text — both are fine, and a tick plus a sentence of context is better
+than either alone. Options are pre-filled where the question already enumerated them; anything
+unlisted goes in **Notes**. Leave a block untouched if it is still unanswered.
+
+---
+
+#### Q3 — Session timetable: typed or imported?
+
+> Is the session timetable typed in, or importable (university time-table PDF)?
+
+- [ ] Typed in by the clerk
+- [ ] Imported from the university time-table PDF
+- [ ] Both — import with manual correction
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q4 — Seat labelling on doors
+
+> `Row 1 / Seat 4`, `R1-S4`, or bench numbers?
+
+- [ ] `Row 1 / Seat 4` (long form)
+- [ ] `R1-S4` (short form)
+- [ ] Bench numbers
+- [ ] Something else (describe below)
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q5 ⚑ — Bench adjacency when `seats_per_bench > 1`
+
+> All occupants different papers, or only neighbours? Does front/back matter?
+
+Who must differ:
+
+- [ ] All occupants of a bench must be on different papers
+- [ ] Only immediate neighbours must differ
+- [ ] No adjacency rule — anyone may sit anywhere
+
+Front/back:
+
+- [ ] Front/back adjacency also matters
+- [ ] Front/back is irrelevant — side-by-side only
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**  ·  **`DECISIONS.md` entry written:** [ ]
+
+---
+
+#### Q6 — Ex-students on attestation sheets
+
+> Do Ex-students appear on attestation sheets, or only ATKT?
+
+- [ ] Both Ex and ATKT appear
+- [ ] Only ATKT appears
+- [ ] Other statuses appear too (list them below)
+
+Exact spellings seen on the sheets (these become the status allowlist):
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q7 — UFM fields and categories
+
+> Mandatory UFM fields and category list; is a booklet number recorded?
+
+Booklet number:
+
+- [ ] Recorded for every candidate
+- [ ] Recorded only for UFM cases
+- [ ] Not recorded at all
+
+Mandatory fields on a UFM case:
+
+Category list (the full vocabulary the centre uses):
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q8 ⚑ — Retention for tier 3, and legal hold
+
+> Retention years for tier 3 records; legal hold rules.
+
+**Retention period for tier 3** (`Student`, `Enrollment`, `SeatingPlan`, `Attendance`,
+`MalpracticeCase`, `Job` metadata) — the §16.5 default is 3 years:
+
+______ years
+
+**What triggers a legal hold, and who may set or clear it:**
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**  ·  **`DECISIONS.md` entry written:** [ ]
+
+---
+
+#### Q9 — Who may publish a plan; two-person rule for UFM
+
+> May a clerk publish a plan, or only the superintendent? Two-person rule for UFM?
+
+Publishing a seating plan:
+
+- [ ] Clerk may publish
+- [ ] Only the superintendent (`controller`) may publish
+
+Recording a UFM case:
+
+- [ ] One person may record and close it
+- [ ] Two-person rule — a second person must confirm
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q10 — Non-numeric roll formats
+
+> Any non-numeric roll formats at this centre (B.B.LLB?)
+
+- [ ] All rolls are 8-digit numeric
+- [ ] Some are non-numeric — examples below
+
+Real examples (exact format, one per line):
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q11 — Print names on outputs
+
+> Print names on attendance sheets / door notices?
+
+- [ ] O2 room attendance sheet — print names
+- [ ] O7 roll-wise door notice — print names
+- [ ] Neither — roll numbers only
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q12 (residual) — Hosted or on-premise?
+
+> Pilot hosted, or on-premise at the centre? *(Same-origin serving, no custom domain, and Neon are
+> already decided — see §23.1.)*
+
+- [ ] Hosted (cloud — the current Render / Neon / R2 shape)
+- [ ] On-premise at the centre
+- [ ] Hosted for the pilot, on-premise later
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q13 — Warm-editorial palette on seating screens
+
+> Keep the warm-editorial palette for the seating screens? (§15.6 recommends yes)
+
+- [ ] Yes — keep it, add the `seat-*` state tokens
+- [ ] No — describe what instead
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q14 — Largest session to size the UI for
+
+> Largest session: candidates / papers / rooms.
+
+- Candidates: ______
+- Papers in one session: ______
+- Rooms in one session: ______
+- Widest room (columns): ______
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q15 — PDF rendering scope
+
+> PDF for O1/O2/O4/O5 inside Gate F, or later?
+
+- [ ] Inside Gate F (F11 runs as planned)
+- [ ] Later — Excel output only for now
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q16 ⚑ — Offline operation on exam day
+
+> Is offline operation required on exam day?
+
+- [ ] Yes — attendance must work with no network
+- [ ] No — the centre has reliable network during exams
+- [ ] Degraded is acceptable — describe below
+
+If yes: what must work offline (attendance entry only, or seating charts and dockets too), and how
+long a disconnection must be survivable:
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**  ·  **`DECISIONS.md` entry written:** [ ]
+
+---
+
+#### Q17 — Attendance cut-off and late entry
+
+> Attendance cut-off / late-entry flag?
+
+- [ ] A candidate arriving after a cut-off is marked late (flagged, still present)
+- [ ] No cut-off — present is present
+- [ ] Late arrivals are refused entry after a fixed time
+
+Cut-off time, if any (minutes after the paper starts): ______
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q18 — `Room 4` in the sample workbook
+
+> One room with 7 columns, or two rooms (`4-A`, `4-B`)?
+
+- [ ] One room, 7 columns
+- [ ] Two rooms — `Room 4-A` and `Room 4-B`
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q19 — The `Summ` "All Sub" row
+
+> Hawabagh M.A., 60 candidates across all subjects: is a per-college aggregate row required, or is
+> it a shortcut to retire?
+
+- [ ] Required — O6 must emit a per-college aggregate row
+- [ ] A shortcut to retire — O6 lists every subject separately
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**
+
+---
+
+#### Q20 ⚑ — What the claim counts
+
+> Does the claim (`Amount`) count *enrolled* or *present* candidates?
+
+- [ ] Enrolled — every candidate on the roster, present or not
+- [ ] Present — only candidates who actually sat the paper
+- [ ] Something else (describe below)
+
+**Notes:**
+
+**Answered by:**  ·  **Date:**  ·  **`DECISIONS.md` entry written:** [ ]
 
 ---
 
