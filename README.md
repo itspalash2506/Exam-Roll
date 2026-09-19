@@ -178,14 +178,11 @@ examroll/
 
 ## Roadmap
 
-| Phase | Features                                                                                     |
-|-------|----------------------------------------------------------------------------------------------|
-| **2** | **Production Foundation** — user login + roles (**session** auth), per-college data isolation, PostgreSQL, extraction correctness, rate limiting, privacy/retention. *No new features.* |
-| 3     | Object storage, durable job queue, PDF output with college letterhead, Word document output, print layout |
-| 4     | College branding upload, hall ticket generation, seating arrangement                          |
-| 5     | Marks/grades extraction, report cards, email delivery, admin dashboard, audit logs             |
+See `PROGRESS.md` for current status — it's the single source of truth for what's done and what's
+next, so it doesn't drift out of sync with a second table kept here. The roadmap itself is
+`FUTURE_UNIFIED.md` §22's Gate model (Pilot → Features → Multi-centre), implemented prompt-by-prompt
+in `PROMPTS.md`.
 
-Phase 2 is the set of launch blockers from the production audit in `FUTURE.md`; the task breakdown
-is in `PROGRESS.md`. Auth is server-side sessions rather than JWT (revocability — see `FUTURE.md` §7),
-and PostgreSQL lands *before* auth because the tenancy migration adds a `NOT NULL` column that SQLite
+Auth is server-side sessions rather than JWT (revocability — see `FUTURE_UNIFIED.md` §7), and
+Postgres landed *before* auth because the tenancy migration adds a `NOT NULL` column that SQLite
 cannot add without a table rebuild.
