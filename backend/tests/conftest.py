@@ -265,7 +265,7 @@ def make_pdf_pages():
                 patcher.stop()
             patcher = patch(
                 "app.services.extractors.pdf_extractor._extract_page_texts",
-                return_value=p,
+                return_value=(p, False),
             )
             return patcher.start()
 

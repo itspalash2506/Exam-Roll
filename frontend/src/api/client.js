@@ -60,6 +60,11 @@ export const createExam = (payload) => api.post('/exams', payload)
 export const getColleges = () => api.get('/colleges')
 export const createCollege = (payload) => api.post('/colleges', payload)
 
+// ── Org settings (P10, FUTURE_UNIFIED.md §8.4 item 2 — AI opt-out) ─────────
+
+export const getOrgSettings = () => api.get('/settings')
+export const updateOrgSettings = (payload) => api.patch('/settings', payload)
+
 // Multi-file upload: repeated "files" fields, one Job for the whole batch.
 // examId/collegeId are optional (an upload predating the picker is still
 // valid — see upload.py) but, when the caller has them, are attached so

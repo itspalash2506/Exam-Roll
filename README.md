@@ -6,11 +6,11 @@ ExamRoll is a web application built for college exam departments to automate the
 
 The backend uses Groq's `openai/gpt-oss-20b` model to classify the document type and enrich subject metadata, while robust rule-based extractors handle the actual data parsing. If the AI is unavailable, the pipeline falls back gracefully to rule-based extraction, ensuring the app is always usable. Real-time progress updates are delivered to the browser via WebSocket so users can watch each processing step live.
 
-Every processed document is stored in a SQLite database, giving the exam department a history of uploads with the ability to re-download any previously generated Excel file. The stack runs locally on Windows with two simple terminal commands; the only external service is the free Groq API.
+Every processed document is stored in Postgres, giving the exam department a history of uploads with the ability to re-download any previously generated Excel file. Local development uses SQLite instead, with no cloud account required beyond the free Groq API. Uploaded files and generated outputs live in Cloudflare R2 object storage in production (falling back to local disk when R2 isn't configured, which is the default for local dev).
 
-> **Note on data handling.** AI classification sends a sample of the uploaded document — which contains student roll numbers — to Groq's API in the United States. It is not processed locally. Set `GROQ_API_KEY=""` to disable AI entirely and use rule-based extraction only. When deployed to a free-tier host with an ephemeral disk, job history is best-effort and does not survive a restart (see `DEPLOYMENT.md`).
+> **Note on data handling.** AI classification sends a sample of the uploaded document — which contains student roll numbers — to Groq's API in the United States. It is not processed locally. Set `GROQ_API_KEY=""` to disable AI entirely and use rule-based extraction only. See `DEPLOYMENT.md` for hosting specifics.
 
-> ⚠️ **Pre-production.** ExamRoll is Phase 1 complete and **not yet safe to publish publicly**: it has no authentication, and PDF pages listing multiple students currently yield only the first. Both are being fixed in Phase 2 — see `FUTURE.md` for the full audit and `PROGRESS.md` for the task list.
+> ⚠️ **Pre-production.** ExamRoll is in Phase 2 (production-readiness) and **not yet safe to publish publicly**. Extraction correctness, authentication, tenant isolation, and object storage are done; still open: per-org rate limiting, security headers, and all of privacy/retention (DPDP). See `FUTURE_UNIFIED.md` for the full audit and `PROGRESS.md` for the current task list.
 
 ## Features
 
@@ -33,7 +33,7 @@ Every processed document is stored in a SQLite database, giving the exam departm
 | Frontend    | React 18, Vite 5, Tailwind CSS 3, React Router v6   |
 | State       | TanStack Query v5, React Context                     |
 | Backend     | FastAPI 0.115, Python 3.11+, Uvicorn                 |
-| Database    | SQLite via SQLAlchemy 2.0 async ORM + aiosqlite      |
+| Database    | Postgres (prod) / SQLite (dev) via SQLAlchemy 2.0 async ORM + Alembic |
 | AI          | Groq API — openai/gpt-oss-20b                       |
 | PDF         | pdfplumber (primary) + pypdf (fallback)              |
 | Excel I/O   | openpyxl                                             |

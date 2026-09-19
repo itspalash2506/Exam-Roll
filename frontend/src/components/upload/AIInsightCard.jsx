@@ -1,11 +1,10 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Sparkles, BookOpen, GraduationCap, CheckCircle, ChevronDown, ChevronUp, Edit3,
+  Sparkles, BookOpen, GraduationCap, CheckCircle, ChevronDown, ChevronUp,
   Files, AlertTriangle
 } from 'lucide-react'
 import Button from '../common/Button.jsx'
-import Modal from '../common/Modal.jsx'
 import { formatDocType } from '../../utils/formatters.js'
 import { durations, easings, useReducedMotion } from '../../lib/motion.js'
 
@@ -29,9 +28,8 @@ function ConfidenceMeter({ value }) {
   )
 }
 
-export default function AIInsightCard({ insight, onProceed, onEdit }) {
+export default function AIInsightCard({ insight, onProceed }) {
   const [showAll, setShowAll] = useState(false)
-  const [editOpen, setEditOpen] = useState(false)
   const reduced = useReducedMotion()
 
   if (!insight) return null
@@ -170,26 +168,9 @@ export default function AIInsightCard({ insight, onProceed, onEdit }) {
             <CheckCircle size={15} />
             Looks correct, proceed
           </Button>
-          <Button
-            variant="secondary"
-            size="md"
-            onClick={() => { setEditOpen(true); onEdit?.() }}
-          >
-            <Edit3 size={15} />
-            Edit manually
-          </Button>
         </div>
       </motion.div>
-
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit AI Findings">
-        <p className="text-small text-muted mb-4">
-          Manual editing of AI findings will be available in a future update. For now, you can proceed and
-          adjust the export output using the Style Panel.
-        </p>
-        <Button variant="primary" size="md" onClick={() => { setEditOpen(false); onProceed?.() }} className="w-full">
-          Proceed anyway
-        </Button>
-      </Modal>
     </>
   )
 }
+

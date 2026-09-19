@@ -15,6 +15,24 @@ async def test_health_endpoint(client):
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_reports_503_when_db_unreachable(client, monkeypatch):
+    """/health must do a real round-trip, not report a hardcoded "connected"
+    (P2-32) — simulate a broken DB by making AsyncSessionLocal raise."""
+    import app.database as database
+
+    def _broken_session_local():
+        raise RuntimeError("simulated DB outage")
+
+    monkeypatch.setattr(database, "AsyncSessionLocal", _broken_session_local)
+
+    response = await client.get("/health")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["database"] == "unreachable"
+
+
+@pytest.mark.asyncio
 async def test_upload_happy_path(client, make_pdf_pages):
     """POST /api/v1/upload succeeds with valid PDF, processes inline, and persists completed job."""
     with make_pdf_pages():

@@ -1,30 +1,16 @@
-import { CheckCircle, Lock } from 'lucide-react'
+import { CheckCircle } from 'lucide-react'
 import clsx from 'clsx'
 
+// The only output format this app actually generates. The three
+// higher-effort formats that used to sit here as locked "Coming Soon" tiles
+// (hall tickets, seating plans, attendance sheets) advertised features that
+// did not exist; removed rather than shipped as vaporware (P3-70,
+// DECISIONS.md 2026-09-20). They return as real tiles once Gate F builds them.
 const OUTPUT_TYPES = [
   {
     id: 'subject_wise',
     label: 'Subject-wise Roll Number List',
     description: 'One sheet with all subjects as columns and roll numbers as rows',
-    available: true,
-  },
-  {
-    id: 'hall_ticket',
-    label: 'Hall Ticket Generator',
-    description: 'Generate individual hall tickets per student with seat assignment',
-    available: false,
-  },
-  {
-    id: 'seating_plan',
-    label: 'Seating Plan',
-    description: 'Create room-wise seating arrangements from the roll list',
-    available: false,
-  },
-  {
-    id: 'attendance_sheet',
-    label: 'Attendance Sheet',
-    description: 'Blank attendance register with roll numbers pre-filled',
-    available: false,
   },
 ]
 
@@ -34,27 +20,19 @@ export default function OutputTypeSelector({ value, onChange }) {
       <p className="text-caption font-medium uppercase tracking-wide text-muted">Output Format</p>
       <div className="grid gap-3 sm:grid-cols-2">
         {OUTPUT_TYPES.map((type) => {
-          const selected = value === type.id && type.available
+          const selected = value === type.id
           return (
             <button
               key={type.id}
               type="button"
-              disabled={!type.available}
-              onClick={() => type.available && onChange?.(type.id)}
+              onClick={() => onChange?.(type.id)}
               className={clsx(
                 'relative flex flex-col items-start rounded-2xl border p-4 text-left transition-all duration-fast ease-standard',
-                type.available
-                  ? selected
-                    ? 'border-primary bg-primary/5 shadow-warm'
-                    : 'border-line bg-surface hover:border-primary/40 hover:shadow-warm cursor-pointer'
-                  : 'border-line bg-canvas/60 cursor-not-allowed opacity-60',
+                selected
+                  ? 'border-primary bg-primary/5 shadow-warm'
+                  : 'border-line bg-surface hover:border-primary/40 hover:shadow-warm cursor-pointer',
               )}
             >
-              {!type.available && (
-                <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-line px-2 py-0.5 text-caption text-muted">
-                  <Lock size={10} /> Coming Soon
-                </span>
-              )}
               {selected && (
                 <CheckCircle size={18} className="absolute right-3 top-3 text-primary" />
               )}

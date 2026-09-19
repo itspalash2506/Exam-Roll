@@ -239,7 +239,6 @@ export default function Upload() {
         <AIInsightCard
           insight={insight}
           onProceed={() => setStep(4)}
-          onEdit={() => {}}
         />
       )}
 

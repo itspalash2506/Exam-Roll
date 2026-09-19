@@ -29,7 +29,7 @@ GOLDEN_DIR = Path(__file__).parent / "golden"
 
 
 def _extract(pages):
-    with patch.object(px, "_extract_page_texts", return_value=pages):
+    with patch.object(px, "_extract_page_texts", return_value=(pages, False)):
         return px.extract_from_pdf_with_stats(b"", "x.pdf")
 
 
@@ -86,7 +86,7 @@ def test_no_status_on_a_three_student_page_defaults_and_warns():
         "MBAN301 - Business Mathematics\n"
         "Roll No: 10001  Priya S\nRoll No: 10002  Arjun K\nRoll No: 10003  Meera R\n"
     )
-    students, _, _, _ = _extract([page])
+    students, _, _, _, _ = _extract([page])
 
     assert len(students) == 3
     assert all(s.status is StudentStatus.REGULAR for s in students)
@@ -104,7 +104,7 @@ def test_explicit_status_does_not_warn():
         "Roll No: 10001  Priya S  Regular\n"
         "Roll No: 10002  Arjun K  ATKT\n"
     )
-    students, _, _, _ = _extract([page])
+    students, _, _, _, _ = _extract([page])
 
     by_roll = {s.roll_number: s for s in students}
     assert by_roll["10001"].status is StudentStatus.REGULAR
@@ -117,13 +117,13 @@ def test_explicit_status_does_not_warn():
 
 def test_name_is_captured_and_bounded():
     page = "MBAN301 - Business Mathematics\nRoll No: 24136599  Shivani Mishra\n"
-    students, _, _, _ = _extract([page])
+    students, _, _, _, _ = _extract([page])
     assert students[0].name == "Shivani Mishra"
 
 
 def test_missing_name_is_empty_and_does_not_warn():
     """§14.1 — names are optional on outputs (Q11), so absence is not a warning."""
-    students, _, _, _ = _extract(["MBAN301 - Maths\nRoll No: 10001\n"])
+    students, _, _, _, _ = _extract(["MBAN301 - Maths\nRoll No: 10001\n"])
     assert students[0].name == ""
     assert "name" not in " ".join(summarize_status_warnings(students)).lower()
 
@@ -186,7 +186,7 @@ def test_golden_file(pages_file):
     )
     pages = pages_file.read_text("utf-8").split("\n---PAGE---\n")
 
-    students, subjects, _, page_count = _extract(pages)
+    students, subjects, _, page_count, _ = _extract(pages)
 
     assert page_count == expected["page_count"]
     assert len(students) == expected["student_count"]

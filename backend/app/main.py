@@ -6,14 +6,17 @@ from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.database as database
 from app.auth import authorize_ws
 from app.config import get_settings
 from app.database import get_db
 from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.websocket_manager import manager
 from app.routers import auth as auth_router
+from app.routers import settings as settings_router
 from app.routers import colleges, exams, upload, jobs, export
 
 _settings = get_settings()
@@ -35,11 +38,16 @@ async def lifespan(app: FastAPI):
     logger.info("ExamRoll shutting down")
 
 
+_docs_public = _settings.app_env != "production"
+
 app = FastAPI(
     title="ExamRoll API",
     version="1.0.0",
     description="Intelligent exam document processor",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_public else None,
+    redoc_url="/redoc" if _docs_public else None,
+    openapi_url="/openapi.json" if _docs_public else None,
 )
 
 app.add_middleware(
@@ -59,6 +67,7 @@ app.add_middleware(
 app.include_router(auth_router.router, prefix="/api/v1")
 app.include_router(exams.router, prefix="/api/v1")
 app.include_router(colleges.router, prefix="/api/v1")
+app.include_router(settings_router.router, prefix="/api/v1")
 app.include_router(upload.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
@@ -90,15 +99,28 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "ok",
+    # database.AsyncSessionLocal is read off the module, not imported by name,
+    # because conftest.py reassigns that module attribute for the test DB —
+    # an `from app.database import AsyncSessionLocal` binding here would keep
+    # pointing at the pre-test-override object (P2-32, DECISIONS.md 2026-09-20).
+    try:
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        db_status = "connected"
+    except Exception:
+        logger.exception("Health check DB round-trip failed")
+        db_status = "unreachable"
+
+    payload = {
+        "status": "ok" if db_status == "connected" else "degraded",
         "version": "1.0.0",
         "environment": _settings.app_env,
-        "database": "connected",
+        "database": db_status,
         "groq": "configured"
         if _settings.groq_api_key and _settings.groq_api_key != "your_groq_api_key_here"
         else "not configured",
     }
+    return JSONResponse(status_code=200 if db_status == "connected" else 503, content=payload)
 
 
 @app.websocket("/ws/jobs/{job_id}")

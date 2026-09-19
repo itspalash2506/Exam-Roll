@@ -70,14 +70,14 @@ LOW_YIELD_PAGES = [
 
 def _extract(pages):
     """Run the PDF extractor over pre-rendered page texts."""
-    with patch.object(px, "_extract_page_texts", return_value=pages):
+    with patch.object(px, "_extract_page_texts", return_value=(pages, False)):
         return px.extract_from_pdf_with_stats(b"", "x.pdf")
 
 
 # ── P0-1 · every student on a page must be extracted ─────────────────────────
 
 def test_multiple_students_on_one_page_are_all_extracted():
-    students, subjects, _, _ = _extract([MULTI_STUDENT_PAGE])
+    students, subjects, _, _, _ = _extract([MULTI_STUDENT_PAGE])
 
     assert {s.roll_number for s in students} == {"10001", "10002", "10003"}, (
         "P0-1: students after the first on a page are silently discarded"
@@ -87,7 +87,7 @@ def test_multiple_students_on_one_page_are_all_extracted():
 
 def test_bare_column_roll_layout():
     """Rolls listed one per line with no 'Roll No:' prefix must still be found."""
-    students, _, _, _ = _extract([BARE_COLUMN_PAGE])
+    students, _, _, _, _ = _extract([BARE_COLUMN_PAGE])
 
     assert {s.roll_number for s in students} == {"10001", "10002", "10003", "10004"}, (
         "P0-1: a bare roll-number column yields no students at all today"
@@ -97,7 +97,7 @@ def test_bare_column_roll_layout():
 # ── P0-2 · roll numbers must never be classified as subject codes ────────────
 
 def test_roll_numbers_never_become_subject_codes():
-    students, subjects, _, _ = _extract([BARE_CODE_PAGE])
+    students, subjects, _, _, _ = _extract([BARE_CODE_PAGE])
 
     # Asserted first so the recorded failure pins P0-2 (corruption) rather than
     # P0-1 (the student count, which is wrong on this fixture too).
@@ -124,7 +124,7 @@ def test_xlsx_header_202401_is_not_a_subject():
 @pytest.mark.asyncio
 async def test_low_yield_warning(client):
     """A 40-page document yielding 1 student must tell the user, not complete green."""
-    with patch.object(px, "_extract_page_texts", return_value=LOW_YIELD_PAGES):
+    with patch.object(px, "_extract_page_texts", return_value=(LOW_YIELD_PAGES, False)):
         files = [("files", ("low_yield.pdf", b"%PDF-1.4 dummy", "application/pdf"))]
         res = await client.post("/api/v1/upload", files=files)
         assert res.status_code == 200
@@ -145,7 +145,7 @@ async def test_low_yield_warning(client):
 
 def test_one_student_per_page_still_works():
     """The current attestation shape — the one layout P0-1 does not break."""
-    students, subjects, sample, pages = _extract(ONE_PER_PAGE_PAGES)
+    students, subjects, sample, pages, _ = _extract(ONE_PER_PAGE_PAGES)
 
     assert pages == 3
     assert {s.roll_number for s in students} == {"10001", "10002", "10003"}

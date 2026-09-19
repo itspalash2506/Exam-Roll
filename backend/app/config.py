@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # an unbounded number of files and exhaust the ephemeral disk instead.
     max_batch_files: int = 10
     max_total_batch_mb: int = 150
+    # A 50 MB upload can still expand into an unbounded row/page count inside
+    # its own format — a ~2 MB xlsx can declare 1M+ rows, a small PDF can
+    # declare thousands of pages. These bound the actual parse work, not the
+    # file on disk (P1-11, P1-12, DECISIONS.md 2026-09-20).
+    max_rows_per_sheet: int = 100_000
+    max_cols_per_sheet: int = 512
+    max_pdf_pages: int = 2000
     # NoDecode: without it pydantic-settings JSON-decodes list fields itself
     # BEFORE the validator below runs, so a plain comma-separated value
     # (CORS_ORIGINS=http://a,https://b) crashed at boot with a JSONDecodeError.

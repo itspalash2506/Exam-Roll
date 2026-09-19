@@ -1,9 +1,11 @@
 import re
 import logging
+import zipfile
 from io import BytesIO
 
 import openpyxl
 
+from app.config import get_settings
 from app.schemas.schemas import StudentRecord
 from app.utils.student_utils import derive_admission_year
 from app.utils.subject_utils import extract_all_subjects, normalize_subject_name
@@ -11,6 +13,25 @@ from app.utils.subject_utils import extract_all_subjects, normalize_subject_name
 logger = logging.getLogger(__name__)
 
 _CODE_RE = re.compile(r"\b([A-Z]{2,6}\d{3,4}|\d{5,6})\b")
+
+# A .xlsx is a ZIP archive; the declared uncompressed size in its central
+# directory is attacker-controlled, so this is a cheap first filter, not the
+# whole defence — the row/col cap in _read_rows is what actually bounds
+# memory once openpyxl starts reading (P1-11, DECISIONS.md 2026-09-20).
+_MAX_ZIP_RATIO = 120
+_MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+
+
+def _reject_zip_bomb(file_bytes: bytes, filename: str) -> None:
+    try:
+        with zipfile.ZipFile(BytesIO(file_bytes)) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+    except zipfile.BadZipFile as exc:
+        raise RuntimeError(f"Cannot open Excel file '{filename}': {exc}") from exc
+    if total > _MAX_UNCOMPRESSED_BYTES or total > len(file_bytes) * _MAX_ZIP_RATIO:
+        raise RuntimeError(
+            f"'{filename}': archive expands to {total / 1024**2:.0f} MB — rejected"
+        )
 
 # Column header names that indicate the roll number column
 _ROLL_HEADER_NAMES = frozenset(
@@ -32,32 +53,61 @@ def extract_from_excel(
         subjects    — {code: name} dict
         text_sample — first ~3000 chars of row data as text, for AI classifier
     """
-    students, subjects, text_sample, _row_count = extract_from_excel_with_stats(
+    students, subjects, text_sample, _row_count, _truncated = extract_from_excel_with_stats(
         file_bytes, filename
     )
     return students, subjects, text_sample
 
 
+def _read_rows(ws, max_rows: int, max_cols: int) -> tuple[list[tuple], bool]:
+    """Stream rows, honouring the caps that make read_only=True worth using.
+
+    Materialising every row into a list (the previous behaviour) defeated
+    read_only entirely: a ~2 MB upload can declare 1M+ rows, and openpyxl
+    would hold all of them at once regardless of the flag. Returns
+    (rows, truncated) — a truncated read is reported to the user rather than
+    silently producing a partial roster (P1-11, DECISIONS.md 2026-09-20).
+    """
+    rows: list[tuple] = []
+    truncated = False
+    for i, row in enumerate(ws.iter_rows(values_only=True)):
+        if i >= max_rows:
+            truncated = True
+            break
+        if any(cell is not None for cell in row):
+            rows.append(row[:max_cols])
+    return rows, truncated
+
+
 def extract_from_excel_with_stats(
     file_bytes: bytes, filename: str
-) -> tuple[list[StudentRecord], dict[str, str], str, int]:
-    """Same extraction as extract_from_excel, plus the real data-row count for progress reporting."""
+) -> tuple[list[StudentRecord], dict[str, str], str, int, bool]:
+    """Same extraction as extract_from_excel, plus the real data-row count
+    for progress reporting and whether the sheet was truncated by the row cap."""
+    settings = get_settings()
+    _reject_zip_bomb(file_bytes, filename)
+
     try:
         wb = openpyxl.load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
     except Exception as exc:
         raise RuntimeError(f"Cannot open Excel file '{filename}': {exc}") from exc
 
-    ws = _choose_sheet(wb)
+    try:
+        ws = _choose_sheet(wb)
+        all_rows, truncated = _read_rows(
+            ws, settings.max_rows_per_sheet, settings.max_cols_per_sheet
+        )
+    finally:
+        wb.close()
 
-    # Read all non-empty rows
-    all_rows: list[tuple] = [
-        row for row in ws.iter_rows(values_only=True)
-        if any(cell is not None for cell in row)
-    ]
-    wb.close()
+    if truncated:
+        logger.warning(
+            "'%s': sheet exceeds %d rows — only the first rows were read",
+            filename, settings.max_rows_per_sheet,
+        )
 
     if not all_rows:
-        return [], {}, "", 0
+        return [], {}, "", 0, truncated
 
     header_row = [str(c).strip() if c is not None else "" for c in all_rows[0]]
     data_rows = all_rows[1:]
@@ -78,7 +128,7 @@ def extract_from_excel_with_stats(
         text_lines.append("\t".join(str(c) if c is not None else "" for c in row))
     text_sample = "\n".join(text_lines)[:3000]
 
-    return students, subjects, text_sample, len(data_rows)
+    return students, subjects, text_sample, len(data_rows), truncated
 
 
 # ── Format A: matrix / Split Subjects layout ─────────────────────────────────

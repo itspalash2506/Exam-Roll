@@ -77,7 +77,7 @@ def test_pdf_extractor_attestation_sheet():
         "Roll No: 10003  MBAN302 Accountancy  MBAN303 Economics",
     ]
 
-    with patch("app.services.extractors.pdf_extractor._extract_page_texts", return_value=mock_pages):
+    with patch("app.services.extractors.pdf_extractor._extract_page_texts", return_value=(mock_pages, False)):
         students, subjects, text_sample = extract_from_pdf(b"dummy", "attest.pdf")
 
     assert len(students) == 3, f"Expected 3 students, got {len(students)}"
@@ -97,7 +97,7 @@ def test_pdf_extractor_empty_pdf():
     """An empty page list returns empty students/subjects without raising."""
     from app.services.extractors.pdf_extractor import extract_from_pdf
 
-    with patch("app.services.extractors.pdf_extractor._extract_page_texts", return_value=[]):
+    with patch("app.services.extractors.pdf_extractor._extract_page_texts", return_value=([], False)):
         students, subjects, text_sample = extract_from_pdf(b"dummy", "empty.pdf")
 
     assert students == []
@@ -110,7 +110,7 @@ def test_pdf_extractor_no_roll_numbers():
     from app.services.extractors.pdf_extractor import extract_from_pdf
 
     pages = ["Department of Commerce\nMBAN301 Business Mathematics\nMBAN302 Accountancy"]
-    with patch("app.services.extractors.pdf_extractor._extract_page_texts", return_value=pages):
+    with patch("app.services.extractors.pdf_extractor._extract_page_texts", return_value=(pages, False)):
         students, subjects, _ = extract_from_pdf(b"dummy", "subjects_only.pdf")
 
     assert students == []

@@ -5,7 +5,14 @@ import traceback
 
 from sqlalchemy import select
 
-from app.models.db_models import Enrollment, ExtractedData, Job, Student, SubjectOffering
+from app.models.db_models import (
+    Enrollment,
+    ExtractedData,
+    Job,
+    Organization,
+    Student,
+    SubjectOffering,
+)
 from app.schemas.schemas import (
     StudentRecord,
     StudentStatus,
@@ -485,7 +492,7 @@ class DocumentProcessor:
                 # whole batch resident was what made peak memory scale with
                 # batch size.
                 file_bytes = await storage.download_bytes(key)
-                students, subjects, sample, doc_count = await asyncio.to_thread(
+                students, subjects, sample, doc_count, truncated = await asyncio.to_thread(
                     _run_extractor, file_type, file_bytes, name
                 )
                 del file_bytes
@@ -497,6 +504,18 @@ class DocumentProcessor:
                 continue
 
             unit = "pages" if file_type == "pdf" else "rows"
+
+            if truncated:
+                cap = (
+                    settings.max_pdf_pages if file_type == "pdf"
+                    else settings.max_rows_per_sheet
+                )
+                truncation_warning = (
+                    f"File {i} ({name}): exceeds {cap:,} {unit} — only the "
+                    f"first {cap:,} were read. Split the file and re-upload."
+                )
+                logger.warning("Job %s: %s", job_id, truncation_warning)
+                file_warnings.append(truncation_warning)
 
             # P0-1 honesty check. A one-student-per-page document legitimately
             # yields students == pages; anything far below that means the layout
@@ -628,15 +647,26 @@ class DocumentProcessor:
         if mixed_warning:
             file_warnings.append(mixed_warning)
 
+        # Organization.ai_processing_enabled (§8.4 item 2) — when an org has
+        # opted out of third-party AI, no document sample or roll number ever
+        # leaves this process for Groq. Defaults to enabled only if the org
+        # row is somehow missing (org_id is a NOT NULL FK, so this should not
+        # happen in practice) — never silently disables AI for everyone else.
+        org = (
+            await db_session.execute(select(Organization).where(Organization.id == job.org_id))
+        ).scalar_one_or_none()
+        ai_enabled = org.ai_processing_enabled if org else True
+
         ai_insight = None
         ai_warning = None
-        try:
-            ai_insight = await asyncio.to_thread(classify_document, text_sample, job.filename)
-        except Exception as exc:
-            logger.warning(
-                "Groq classification failed for job %s, using rule-based fallback: %s", job_id, exc
-            )
-            ai_warning = f"AI classification unavailable: {exc}"
+        if ai_enabled:
+            try:
+                ai_insight = await asyncio.to_thread(classify_document, text_sample, job.filename)
+            except Exception as exc:
+                logger.warning(
+                    "Groq classification failed for job %s, using rule-based fallback: %s", job_id, exc
+                )
+                ai_warning = f"AI classification unavailable: {exc}"
 
         if ai_insight is None:
             from app.schemas.schemas import AIInsight
@@ -645,7 +675,9 @@ class DocumentProcessor:
                 confidence=0.0,
                 total_students=raw_student_total,
                 subjects_detected=[],
-                notes="AI classification unavailable; rule-based extraction used.",
+                notes="AI disabled for this organisation; rule-based extraction used."
+                if not ai_enabled
+                else "AI classification unavailable; rule-based extraction used.",
                 suggested_outputs=["Subject-wise Roll Number List"],
             )
 
@@ -660,9 +692,14 @@ class DocumentProcessor:
         job.ai_notes = notes or None
         await db_session.flush()
         stage_warning = "; ".join(w for w in [ai_warning, mixed_warning] if w) or None
+        stage_detail = (
+            "skipped (AI disabled for this organisation)"
+            if not ai_enabled
+            else f"{_humanize_doc_type(ai_insight.document_type)} · {ai_insight.confidence * 100:.0f}% confidence"
+        )
         await _emit(
             "ai_analysis", "complete",
-            detail=f"{_humanize_doc_type(ai_insight.document_type)} · {ai_insight.confidence * 100:.0f}% confidence",
+            detail=stage_detail,
             warning=stage_warning,
         )
 
@@ -674,8 +711,9 @@ class DocumentProcessor:
         )
 
         # If rule-based found no students at all, try AI extraction as fallback
+        # — but never when the org has opted out of AI entirely.
         rejected_roll_count = 0
-        if not students and merged:
+        if not students and merged and ai_enabled:
             subject_entries_for_ai = [
                 SubjectEntry(code=c, name=n) for c, n in merged.items()
             ]
@@ -820,7 +858,7 @@ async def process_job(job_id: str) -> None:
 
 def _run_extractor(
     file_type: str, file_bytes: bytes, filename: str
-) -> tuple[list[StudentRecord], dict[str, str], str, int]:
+) -> tuple[list[StudentRecord], dict[str, str], str, int, bool]:
     if file_type == "pdf":
         from app.services.extractors.pdf_extractor import extract_from_pdf_with_stats
         return extract_from_pdf_with_stats(file_bytes, filename)

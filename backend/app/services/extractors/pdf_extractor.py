@@ -5,6 +5,7 @@ from typing import NamedTuple
 
 import pdfplumber
 
+from app.config import get_settings
 from app.schemas.schemas import StudentRecord
 from app.utils.file_utils import clean_text
 from app.utils.student_utils import (
@@ -88,7 +89,7 @@ def extract_from_pdf(
         subjects   — {code: name} map aggregated across all pages
         text_sample — first ~3000 chars from pages 1-2, for AI classifier
     """
-    students, subjects, text_sample, _page_count = extract_from_pdf_with_stats(
+    students, subjects, text_sample, _page_count, _truncated = extract_from_pdf_with_stats(
         file_bytes, filename
     )
     return students, subjects, text_sample
@@ -96,12 +97,17 @@ def extract_from_pdf(
 
 def extract_from_pdf_with_stats(
     file_bytes: bytes, filename: str
-) -> tuple[list[StudentRecord], dict[str, str], str, int]:
-    """Same extraction as extract_from_pdf, plus the real page count for progress reporting."""
-    page_texts = _extract_page_texts(file_bytes, filename)
+) -> tuple[list[StudentRecord], dict[str, str], str, int, bool]:
+    """Same extraction as extract_from_pdf, plus the real page count for
+    progress reporting and whether the document was truncated by the page cap."""
+    max_pages = get_settings().max_pdf_pages
+    page_texts, truncated = _extract_page_texts(file_bytes, filename, max_pages)
+
+    if truncated:
+        logger.warning("'%s': stopping at %d pages", filename, max_pages)
 
     if not page_texts:
-        return [], {}, "", 0
+        return [], {}, "", 0, truncated
 
     text_sample = "\n\n".join(page_texts[:2])[:3000]
     full_text = "\n\n".join(page_texts)
@@ -166,7 +172,7 @@ def extract_from_pdf_with_stats(
     named = {k: v for k, v in all_subjects.items() if v}
     final_subjects = named if named else all_subjects
 
-    return students, final_subjects, text_sample, len(page_texts)
+    return students, final_subjects, text_sample, len(page_texts), truncated
 
 
 class _RollHit(NamedTuple):
@@ -264,25 +270,32 @@ def _find_name(text: str) -> str | None:
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
-def _extract_page_texts(file_bytes: bytes, filename: str) -> list[str]:
-    """Return one cleaned string per page, using pdfplumber with pypdf fallback."""
+def _extract_page_texts(
+    file_bytes: bytes, filename: str, max_pages: int
+) -> tuple[list[str], bool]:
+    """Return one cleaned string per page, using pdfplumber with pypdf
+    fallback, plus whether the document exceeded max_pages and was cut off."""
     try:
-        return _extract_with_pdfplumber(file_bytes)
+        return _extract_with_pdfplumber(file_bytes, max_pages)
     except Exception as exc:
         logger.warning(
             "pdfplumber failed for '%s' (%s) — falling back to pypdf entirely",
             filename, exc,
         )
-        return _extract_with_pypdf(file_bytes, filename)
+        return _extract_with_pypdf(file_bytes, filename, max_pages)
 
 
-def _extract_with_pdfplumber(file_bytes: bytes) -> list[str]:
+def _extract_with_pdfplumber(file_bytes: bytes, max_pages: int) -> tuple[list[str], bool]:
     page_texts: list[str] = []
+    truncated = False
     _pypdf_reader = None
     _pypdf_failed = False
 
     with pdfplumber.open(BytesIO(file_bytes)) as pdf:
         for i, page in enumerate(pdf.pages):
+            if i >= max_pages:
+                truncated = True
+                break
             text: str = page.extract_text() or ""
 
             if not text.strip():
@@ -321,10 +334,12 @@ def _extract_with_pdfplumber(file_bytes: bytes) -> list[str]:
             page.flush_cache()
             page.get_textmap.cache_clear()
 
-    return page_texts
+    return page_texts, truncated
 
 
-def _extract_with_pypdf(file_bytes: bytes, filename: str) -> list[str]:
+def _extract_with_pypdf(
+    file_bytes: bytes, filename: str, max_pages: int
+) -> tuple[list[str], bool]:
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -334,7 +349,11 @@ def _extract_with_pypdf(file_bytes: bytes, filename: str) -> list[str]:
 
     try:
         reader = PdfReader(BytesIO(file_bytes))
-        return [clean_text(page.extract_text() or "") for page in reader.pages]
+        truncated = len(reader.pages) > max_pages
+        return [
+            clean_text(page.extract_text() or "")
+            for page in reader.pages[:max_pages]
+        ], truncated
     except Exception as exc:
         raise RuntimeError(
             f"PDF extraction failed (both pdfplumber and pypdf) for '{filename}': {exc}"
