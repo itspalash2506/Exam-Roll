@@ -60,6 +60,17 @@ class Settings(BaseSettings):
     # production because it logs every SQL statement, including student PII.
     sql_echo: bool = False
 
+    # Same-origin serving (DECISIONS.md, 2026-09-19): the built frontend
+    # (`npm run build` → frontend/dist) is served by this same FastAPI process
+    # alongside /api/v1/* and the WebSocket, so the browser sees ONE origin —
+    # no cross-site cookie problem, no CSRF token, no CORS allowlist needed in
+    # production. Empty (the default) disables it entirely: pytest and
+    # `npm run dev` never build the frontend, so main.py checks whether this
+    # directory actually exists before mounting anything. Resolves relative to
+    # the process CWD like upload_dir/database_url; override with an absolute
+    # path if the built assets live elsewhere.
+    frontend_dist_dir: str = "../frontend/dist"
+
     @model_validator(mode="after")
     def never_echo_in_production(self) -> "Settings":
         """Refuse to boot if sql_echo is enabled in production — it would log
@@ -93,6 +104,15 @@ class Settings(BaseSettings):
     @property
     def max_total_batch_bytes(self) -> int:
         return self.max_total_batch_mb * 1024 * 1024
+
+    @property
+    def frontend_dist_path(self) -> Path | None:
+        """Resolved path to the built frontend, or None if it doesn't exist.
+
+        Returning None (rather than a Path that may not exist) lets main.py
+        do a single truthy check before mounting anything static."""
+        p = Path(self.frontend_dist_dir)
+        return p if p.is_dir() else None
 
     @property
     def sqlite_file_path(self) -> Path | None:

@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.database import init_db
@@ -103,3 +104,33 @@ async def websocket_job(websocket: WebSocket, job_id: str):
     except Exception as exc:
         logger.warning("WebSocket error for job %s: %s", job_id, exc)
         manager.disconnect(websocket, job_id)
+
+
+# ── Same-origin frontend serving (DECISIONS.md, 2026-09-19) ─────────────────
+# Registered LAST, after every API route and the websocket above, so nothing
+# here can shadow them — Starlette matches HTTP routes in registration order,
+# and /api/v1/*, /health and /assets/* are all more specific than the SPA
+# catch-all below and are always matched first.
+#
+# Only active when frontend/dist actually exists (npm run build was run).
+# pytest's ASGITransport client and `npm run dev`'s Vite proxy both never
+# build the frontend, so this stays a no-op for them — nothing to guard at
+# each call site, it simply never registers.
+_dist = _settings.frontend_dist_path
+if _dist is not None:
+    app.mount("/assets", StaticFiles(directory=_dist / "assets"), name="assets")
+
+    _index_html = _dist / "index.html"
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        # Reached only for paths no earlier route matched. A React Router
+        # client-side route (e.g. /jobs/abc123) must still return the SPA
+        # shell on a hard refresh — StaticFiles(html=True) alone does not do
+        # this, it only serves index.html for a request that resolves to a
+        # directory and 404s everything else.
+        return FileResponse(_index_html)
+
+    logger.info("Serving built frontend from %s (same-origin mode)", _dist)
+else:
+    logger.info("frontend/dist not found — same-origin serving disabled (dev/test mode)")
