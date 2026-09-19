@@ -9,12 +9,12 @@ export function useUpload() {
   const { setCurrentJob, refreshJobs } = useJobContext()
 
   const upload = useCallback(
-    async (fileOrFiles) => {
+    async (fileOrFiles, examCollege = {}) => {
       const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles]
       setUploading(true)
       setProgress(0)
       try {
-        const res = await uploadFiles(files, setProgress)
+        const res = await uploadFiles(files, setProgress, examCollege)
         const uploadResp = res.data // { job_id, message, ai_insight }
         const label = files.length === 1 ? files[0].name : `${files.length} files`
         setCurrentJob({ id: uploadResp.job_id, filename: label, status: 'queued' })

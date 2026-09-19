@@ -53,10 +53,23 @@ export const logout = () => api.post('/auth/logout')
 
 export const me = () => api.get('/auth/me')
 
+// ── Exams / Colleges (§14.3 upload picker) ──────────────────────────────────
+
+export const getExams = () => api.get('/exams')
+export const createExam = (payload) => api.post('/exams', payload)
+export const getColleges = () => api.get('/colleges')
+export const createCollege = (payload) => api.post('/colleges', payload)
+
 // Multi-file upload: repeated "files" fields, one Job for the whole batch.
-export const uploadFiles = (files, onProgress) => {
+// examId/collegeId are optional (an upload predating the picker is still
+// valid — see upload.py) but, when the caller has them, are attached so
+// the pipeline's persisting_rows stage has something to write real
+// Student/SubjectOffering/Enrollment rows against.
+export const uploadFiles = (files, onProgress, { examId, collegeId } = {}) => {
   const form = new FormData()
   files.forEach((file) => form.append('files', file))
+  if (examId) form.append('exam_id', examId)
+  if (collegeId) form.append('college_id', collegeId)
   return api.post('/upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: (e) =>

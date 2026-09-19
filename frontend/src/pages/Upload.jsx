@@ -6,6 +6,7 @@ import { Check } from 'lucide-react'
 import clsx from 'clsx'
 import DropZone from '../components/upload/DropZone.jsx'
 import FileList from '../components/upload/FileList.jsx'
+import ExamCollegePicker from '../components/upload/ExamCollegePicker.jsx'
 import AIInsightCard from '../components/upload/AIInsightCard.jsx'
 import StageProgress from '../components/common/StageProgress.jsx'
 import ConfirmExtraction from '../components/preview/ConfirmExtraction.jsx'
@@ -81,6 +82,11 @@ export default function Upload() {
   const [step, setStep] = useState(1)
   const [files, setFiles] = useState([])
   const [jobId, setJobId] = useState(null)
+  // §14.3 — chosen before any file is accepted. Optional at the API level
+  // (an upload predating the picker is still valid), but the UI itself
+  // gates on both being set so a new upload always attaches to something.
+  const [examId, setExamId] = useState(null)
+  const [collegeId, setCollegeId] = useState(null)
   const [style, setStyle] = useState(DEFAULT_STYLE)
   const [outputType, setOutputType] = useState('subject_wise')
   const [filename, setFilename] = useState('Subject-wise-Roll-Number-List')
@@ -138,7 +144,7 @@ export default function Upload() {
   const handleUpload = async () => {
     if (files.length === 0) return
     try {
-      const resp = await upload(files)
+      const resp = await upload(files, { examId, collegeId })
       setJobId(resp.job_id)
       setStep(2)
     } catch (_) {
@@ -181,19 +187,34 @@ export default function Upload() {
         <StepIndicator current={step} />
       </div>
 
-      {/* Step 1: Select files (one or many — dropping again appends) */}
+      {/* Step 1: exam + college (§14.3), then select files (one or many —
+          dropping again appends). Files aren't accepted until both are set. */}
       {step === 1 && (
         <div className="space-y-4">
-          <DropZone onFiles={handleAddFiles} compact={files.length > 0} />
-          <FileList
-            files={files}
-            onAddFiles={handleAddFiles}
-            onRemove={handleRemoveFile}
-            onClearAll={() => setFiles([])}
-            onUpload={handleUpload}
-            uploading={uploading}
-            uploadProgress={uploadProgress}
+          <ExamCollegePicker
+            examId={examId}
+            collegeId={collegeId}
+            onChangeExam={setExamId}
+            onChangeCollege={setCollegeId}
           />
+          {examId && collegeId ? (
+            <>
+              <DropZone onFiles={handleAddFiles} compact={files.length > 0} />
+              <FileList
+                files={files}
+                onAddFiles={handleAddFiles}
+                onRemove={handleRemoveFile}
+                onClearAll={() => setFiles([])}
+                onUpload={handleUpload}
+                uploading={uploading}
+                uploadProgress={uploadProgress}
+              />
+            </>
+          ) : (
+            <p className="text-center text-caption text-muted">
+              Select an exam and a college above to add files.
+            </p>
+          )}
         </div>
       )}
 
