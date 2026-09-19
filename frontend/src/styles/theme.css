@@ -31,6 +31,17 @@
   --color-error: #b4442e;
   --color-highlight: #f0e3c4; /* soft ochre — count rows / emphasis */
 
+  /* ---- Seating grid seat states (F03+) — tinted-bg + solid-text pairs,
+     same recipe as Badge's status colors (bg-X/10 + text-X stays AA), no
+     new hues: every seat state aliases an existing palette color so the
+     warm-editorial system never grows a second palette for one feature. ---- */
+  --color-seat-empty: var(--color-muted); /* unassigned, available */
+  --color-seat-assigned: var(--color-primary); /* has a student */
+  --color-seat-locked: var(--color-secondary); /* assigned + protected from re-allocation */
+  --color-seat-blocked: var(--color-ink); /* out of service ("x") */
+  --color-seat-absent: var(--color-warning); /* marked absent at attendance */
+  --color-seat-ufm: var(--color-error); /* malpractice case on this seat */
+
   /* ---- Type ---- */
   --font-display: 'Fraunces Variable', 'Fraunces', ui-serif, Georgia, serif;
   --font-body: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;

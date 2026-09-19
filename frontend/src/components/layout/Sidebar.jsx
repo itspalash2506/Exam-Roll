@@ -1,11 +1,13 @@
 import { Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Upload, Clock, Settings as SettingsIcon } from 'lucide-react'
+import { LayoutDashboard, Upload, Clock, Settings as SettingsIcon, DoorOpen, CalendarDays } from 'lucide-react'
 import clsx from 'clsx'
 
 const items = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/upload', icon: Upload, label: 'Upload' },
   { to: '/history', icon: Clock, label: 'History' },
+  { to: '/rooms', icon: DoorOpen, label: 'Rooms' },
+  { to: '/sessions', icon: CalendarDays, label: 'Sessions' },
   { to: '/settings', icon: SettingsIcon, label: 'Settings' },
 ]
 

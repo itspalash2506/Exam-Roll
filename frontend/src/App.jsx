@@ -12,6 +12,8 @@ import Upload from './pages/Upload.jsx'
 import JobDetail from './pages/JobDetail.jsx'
 import History from './pages/History.jsx'
 import Settings from './pages/Settings.jsx'
+import Rooms from './pages/Rooms.jsx'
+import Sessions from './pages/Sessions.jsx'
 import NotFound from './pages/NotFound.jsx'
 
 const queryClient = new QueryClient({
@@ -53,6 +55,8 @@ export default function App() {
                     <Route path="/jobs/:jobId" element={<JobDetail />} />
                     <Route path="/history" element={<History />} />
                     <Route path="/settings" element={<Settings />} />
+                    <Route path="/rooms" element={<Rooms />} />
+                    <Route path="/sessions" element={<Sessions />} />
                     <Route path="*" element={<NotFound />} />
                   </Route>
                 </Route>

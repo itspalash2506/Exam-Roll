@@ -75,8 +75,28 @@ export const me = () => api.get('/auth/me')
 
 export const getExams = () => api.get('/exams')
 export const createExam = (payload) => api.post('/exams', payload)
+export const getExamOfferings = (examId) => api.get(`/exams/${examId}/offerings`)
 export const getColleges = () => api.get('/colleges')
 export const createCollege = (payload) => api.post('/colleges', payload)
+
+// ── Rooms (§15.1 seating planner room library) ──────────────────────────────
+
+export const getRooms = () => api.get('/rooms')
+export const getRoom = (roomId) => api.get(`/rooms/${roomId}`)
+export const createRoom = (payload) => api.post('/rooms', payload)
+export const updateRoom = (roomId, payload) => api.patch(`/rooms/${roomId}`, payload)
+export const deleteRoom = (roomId) => api.delete(`/rooms/${roomId}`)
+export const generateRooms = (payload) => api.post('/rooms/generate', payload)
+
+// ── Sessions (§15.2 session setup) ──────────────────────────────────────────
+
+export const getSessions = () => api.get('/sessions')
+export const getSession = (sessionId) => api.get(`/sessions/${sessionId}`)
+export const createSession = (payload) => api.post('/sessions', payload)
+export const setSessionPapers = (sessionId, offeringIds) =>
+  api.put(`/sessions/${sessionId}/papers`, { offering_ids: offeringIds })
+export const acknowledgeClash = (sessionId, studentId) =>
+  api.post(`/sessions/${sessionId}/clashes/acknowledge`, { student_id: studentId })
 
 // ── Org settings (P10, FUTURE_UNIFIED.md §8.4 item 2 — AI opt-out) ─────────
 

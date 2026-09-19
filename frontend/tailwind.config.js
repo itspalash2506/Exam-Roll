@@ -22,6 +22,17 @@ export default {
         warning: '#B7791F',
         error: '#B4442E',
         highlight: '#F0E3C4',
+        // Seating grid seat states (F03+) — each aliases an existing color
+        // above rather than introducing a new hue; see theme.css for the
+        // matching CSS custom properties used by pure-CSS consumers.
+        seat: {
+          empty: '#6B6257', // = muted
+          assigned: '#1F5D4C', // = primary
+          locked: '#C4623F', // = secondary
+          blocked: '#1F1B16', // = ink
+          absent: '#B7791F', // = warning
+          ufm: '#B4442E', // = error
+        },
       },
       fontFamily: {
         display: ['"Fraunces Variable"', 'Fraunces', 'ui-serif', 'Georgia', 'serif'],
