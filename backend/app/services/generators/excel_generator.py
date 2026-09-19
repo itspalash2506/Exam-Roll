@@ -7,9 +7,10 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from app.schemas.schemas import ExtractedDataSchema, StyleConfig
+from app.services.generators.workbook_builder import WorkbookBuilder
 from app.utils.subject_utils import build_subject_roll_map
 
-_BORDER_COLOR = "B0B0B0"
+_BORDER_COLOR = WorkbookBuilder.BORDER_COLOR
 
 
 def generate_excel(
@@ -35,18 +36,20 @@ def generate_excel(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+# Styling helpers delegate to WorkbookBuilder (workbook_builder.py) so every
+# output generator — this one and every future one (seating chart, docket,
+# summary, ...) — shares one definition instead of duplicating it.
 
 def _hex(color: str) -> str:
-    return color.lstrip("#")
+    return WorkbookBuilder.hex_color(color)
 
 
 def _thin_border() -> Border:
-    side = Side(style="thin", color=_BORDER_COLOR)
-    return Border(left=side, right=side, top=side, bottom=side)
+    return WorkbookBuilder.thin_border()
 
 
 def _fill(color_hex: str) -> PatternFill:
-    return PatternFill("solid", fgColor=color_hex)
+    return WorkbookBuilder.fill(color_hex)
 
 
 def _build_roll_map(data: ExtractedDataSchema) -> Dict[str, List[str]]:
@@ -81,7 +84,10 @@ def _build_sheet1(
     if subtitle_parts:
         title_text += "\n" + " | ".join(subtitle_parts)
 
-    c = ws.cell(row=1, column=1, value=title_text)
+    # title_text embeds AI-derived exam_name/course/semester (P0-5) — must be
+    # sanitized even though the "SUBJECT-WISE ROLL NUMBER LIST" prefix means
+    # it can never itself start with a formula-trigger character.
+    c = WorkbookBuilder.safe_cell(ws, row=1, column=1, value=title_text)
     c.font = Font(name=style.font_name, bold=True, size=14, color="FFFFFF")
     c.fill = _fill(hdr_bg)
     c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -99,7 +105,8 @@ def _build_sheet1(
 
     for i, subject in enumerate(subjects):
         col = i + 2
-        c = ws.cell(row=2, column=col, value=f"{subject.code}\n{subject.name}")
+        # subject.code and subject.name are extracted/AI-derived (P0-5).
+        c = WorkbookBuilder.safe_cell(ws, row=2, column=col, value=f"{subject.code}\n{subject.name}")
         c.fill = _fill(hdr_bg)
         c.font = Font(name=style.font_name, bold=True, size=style.font_size, color=hdr_fg)
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -123,7 +130,9 @@ def _build_sheet1(
             col = i + 2
             rolls = roll_map.get(subject.code, [])
             value = rolls[row_idx] if row_idx < len(rolls) else None
-            c = ws.cell(row=excel_row, column=col, value=value)
+            # Roll numbers are extracted from the uploaded document (P0-5) —
+            # the highest-volume sink in the workbook.
+            c = WorkbookBuilder.safe_cell(ws, row=excel_row, column=col, value=value)
             c.fill = row_fill
             c.font = Font(name=style.font_name, size=style.font_size)
             c.alignment = Alignment(horizontal="center", vertical="center")
@@ -144,7 +153,10 @@ def _build_sheet1(
         col = i + 2
         col_letter = get_column_letter(col)
         formula = f"=COUNTA({col_letter}3:{col_letter}{last_data_row})"
-        c = ws.cell(row=count_row, column=col, value=formula)
+        # Generator-built formula from computed column letters/row numbers
+        # only — formula_cell(), never safe_cell(), or this total would be
+        # quote-prefixed into inert text.
+        c = WorkbookBuilder.formula_cell(ws, row=count_row, column=col, formula=formula)
         c.fill = _fill(cnt_bg)
         c.font = Font(name=style.font_name, bold=True, size=style.font_size)
         c.alignment = Alignment(horizontal="center", vertical="center")
@@ -199,7 +211,10 @@ def _build_sheet2(
         lc = ws.cell(row=row, column=1, value=label + ":")
         lc.font = Font(name=style.font_name, bold=True, size=style.font_size)
         lc.alignment = Alignment(horizontal="right", vertical="center")
-        vc = ws.cell(row=row, column=2, value=value)
+        # value includes AI-derived course/semester/exam_name (P0-5) written
+        # with no literal prefix — the cleanest injection point in the file
+        # before this guard.
+        vc = WorkbookBuilder.safe_cell(ws, row=row, column=2, value=value)
         vc.font = Font(name=style.font_name, size=style.font_size)
         vc.alignment = Alignment(horizontal="left", vertical="center")
         ws.row_dimensions[row].height = 18
@@ -224,8 +239,12 @@ def _build_sheet2(
         count = len(roll_map.get(subject.code, []))
         row_fill = _fill(alt_bg) if idx % 2 == 1 else None
 
+        # subject.code and subject.name are extracted/AI-derived (P0-5); idx+1
+        # and count are always ints and never at risk, but safe_cell() passes
+        # non-strings through unchanged so routing the whole row through it
+        # uniformly is simpler than splitting the loop.
         for col, val in enumerate([idx + 1, subject.code, subject.name, count], 1):
-            c = ws.cell(row=row, column=col, value=val)
+            c = WorkbookBuilder.safe_cell(ws, row=row, column=col, value=val)
             c.font = Font(name=style.font_name, size=style.font_size)
             c.alignment = Alignment(
                 horizontal="left" if col == 3 else "center",
@@ -243,8 +262,13 @@ def _build_sheet2(
     data_end = total_row - 1
 
     sum_formula = f"=SUM(D{data_start}:D{data_end})" if n_subjects > 0 else 0
+    # None of these 4 values are user/AI-derived (None, the literal "TOTAL",
+    # or a formula built purely from computed row numbers) — formula_cell()
+    # rather than safe_cell() both because col 4 is a real formula that must
+    # not be quote-prefixed, and to keep every cell write in this file
+    # visibly routed through WorkbookBuilder for auditability.
     for col, val in [(1, None), (2, "TOTAL"), (3, None), (4, sum_formula)]:
-        c = ws.cell(row=total_row, column=col, value=val)
+        c = WorkbookBuilder.formula_cell(ws, row=total_row, column=col, formula=val)
         c.fill = _fill(cnt_bg)
         c.font = Font(name=style.font_name, bold=True, size=style.font_size)
         c.alignment = Alignment(horizontal="center", vertical="center")
