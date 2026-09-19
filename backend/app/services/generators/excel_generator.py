@@ -137,6 +137,13 @@ def _build_sheet1(
             c.font = Font(name=style.font_name, size=style.font_size)
             c.alignment = Alignment(horizontal="center", vertical="center")
             c.border = border
+            if value is not None:
+                # Roll numbers can carry leading zeros (P11) — openpyxl
+                # already stores a Python str as a text cell, but leaving the
+                # format as General means Excel itself may reformat a
+                # numeric-looking value if a user edits the cell later,
+                # silently dropping the leading zeros. '@' pins it to Text.
+                c.number_format = "@"
         ws.row_dimensions[excel_row].height = 18
 
     # ── Count row ─────────────────────────────────────────────────────────────
@@ -170,6 +177,13 @@ def _build_sheet1(
 
     # ── Freeze panes: title + header stay visible when scrolling ─────────────
     ws.freeze_panes = "A3"
+
+    # ── Print setup (P11) — landscape: a roster with several subject
+    # columns is wide, not tall. Title + subject header repeat on every
+    # printed page so a multi-page roster stays legible.
+    WorkbookBuilder.apply_a4_print_setup(
+        ws, last_col=n_cols, last_row=count_row, orientation="landscape", title_rows="1:2",
+    )
 
 
 # ── Sheet 2: Summary ──────────────────────────────────────────────────────────
@@ -299,3 +313,8 @@ def _build_sheet2(
     ws.column_dimensions["B"].width = 16
     ws.column_dimensions["C"].width = 35
     ws.column_dimensions["D"].width = 20
+
+    # ── Print setup (P11) — portrait: 4 narrow columns, easily fits upright.
+    WorkbookBuilder.apply_a4_print_setup(
+        ws, last_col=4, last_row=note_row, orientation="portrait", title_rows="1:9",
+    )

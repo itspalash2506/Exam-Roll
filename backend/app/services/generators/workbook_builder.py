@@ -20,6 +20,8 @@ hence a shared module rather than a helper private to excel_generator.py.
 """
 
 from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.page import PageMargins
 
 # A leading tab/CR is included because some Excel versions apply the same
 # "this looks like a formula" heuristic to leading whitespace control chars,
@@ -94,3 +96,31 @@ class WorkbookBuilder:
         built ONLY from column letters/row numbers this module computed
         itself — never from user- or AI-derived text."""
         return ws.cell(row=row, column=column, value=formula)
+
+    @staticmethod
+    def apply_a4_print_setup(
+        ws,
+        last_col: int,
+        last_row: int,
+        *,
+        orientation: str = "portrait",
+        title_rows: str | None = None,
+    ) -> None:
+        """A4 page setup shared by every output generator that expects to be
+        printed (P11; every Gate F generator — seating chart, docket,
+        attendance sheet — needs the same thing). Fits the sheet's actual
+        content to the page width rather than leaving Excel's default US
+        Letter/no-scaling, which cuts columns off mid-print on an A4 printer.
+
+        `title_rows` is an openpyxl print_title_rows string (e.g. "1:2") to
+        repeat the title/header rows on every printed page of a long roster.
+        """
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.orientation = orientation
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0  # 0 = as many pages tall as needed
+        ws.page_margins = PageMargins(left=0.4, right=0.4, top=0.5, bottom=0.5)
+        ws.print_area = f"A1:{get_column_letter(last_col)}{last_row}"
+        if title_rows:
+            ws.print_title_rows = title_rows
