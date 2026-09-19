@@ -63,3 +63,10 @@ logs/
 # Real attestation sheets — student PII, never commit
 *.pdf
 !frontend/**/*.pdf
+
+# Project documentation is local-only (2026-09-20). Every .md except README.md
+# stays out of git: these carry the production audit, the pilot centre's real
+# operating details, and the answer form. They remain on disk — Claude Code reads
+# them from the working tree, so nothing about the workflow changes.
+*.md
+!README.md
