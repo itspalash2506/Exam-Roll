@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.database import init_db
+from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.websocket_manager import manager
 from app.routers import upload, jobs, export
 
@@ -134,3 +135,15 @@ if _dist is not None:
     logger.info("Serving built frontend from %s (same-origin mode)", _dist)
 else:
     logger.info("frontend/dist not found — same-origin serving disabled (dev/test mode)")
+
+
+# ── Body size limit (P0-6) ────────────────────────────────────────────────
+# Registered LAST in the file, deliberately: Starlette's LAST-added
+# middleware runs FIRST (verified empirically — see body_size_limit.py's
+# docstring), so this must come after CORSMiddleware and log_requests above
+# for it to actually be the outermost check, running before anything else
+# sees the request — including before any multipart parsing begins.
+app.add_middleware(
+    BodySizeLimitMiddleware,
+    max_bytes=_settings.max_total_batch_bytes,
+)
