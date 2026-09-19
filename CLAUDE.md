@@ -17,7 +17,7 @@ ExamRoll is a production-ready web application for college exam departments to:
 | Frontend    | React 18, Vite, Tailwind CSS, React Router v6   |
 | Design      | "Warm editorial" system — Fraunces + Bricolage Grotesque (self-hosted variable fonts via `@fontsource-variable`), framer-motion — see `DESIGN.md` |
 | Backend     | FastAPI 0.115, Python 3.11+, Uvicorn             |
-| Database    | SQLite (dev) via SQLAlchemy 2.0 ORM              |
+| Database    | SQLite (dev) / Postgres (production, `asyncpg`) via SQLAlchemy 2.0 ORM, Alembic migrations |
 | AI          | Groq API (openai/gpt-oss-20b)                   |
 | PDF         | pdfplumber, pypdf                                |
 | Excel I/O   | openpyxl                                         |
@@ -38,17 +38,27 @@ examroll/
 │
 ├── backend/
 │   ├── requirements.txt               Python dependencies
-│   ├── alembic.ini                    Migration config (future)
+│   ├── alembic.ini                    Alembic config (DB URL from Settings, not hardcoded)
+│   ├── alembic/
+│   │   ├── env.py                     Derives sync DB URL from Settings; SQLite batch mode
+│   │   └── versions/                  0000_baseline, 0001_add_tenancy, 0002_exam_model
+│   ├── scripts/
+│   │   └── create_admin.py            One-shot: create the first user for an org
 │   └── app/
-│       ├── main.py                    FastAPI app factory, CORS, router registration
+│       ├── main.py                    FastAPI app factory, CORS, router registration, same-origin frontend serving
 │       ├── config.py                  Pydantic BaseSettings (reads .env)
-│       ├── database.py                SQLAlchemy engine, session factory
+│       ├── database.py                SQLAlchemy engine, session factory (schema via Alembic only)
+│       ├── auth.py                    Session auth: create_session, current_user, require_org, authorize_ws
 │       ├── websocket_manager.py       WebSocket connection manager (broadcast)
+│       ├── middleware/
+│       │   └── body_size_limit.py     Pure ASGI middleware, outermost — rejects oversized bodies pre-parse
 │       ├── models/
-│       │   └── db_models.py           ORM models: Job, ExtractedRow
+│       │   └── db_models.py           ORM models: Organization, User, AuthSession, Job, College, Course, Exam, SubjectOffering, Student, Enrollment, ExtractedData, OutputFile
 │       ├── schemas/
 │       │   └── schemas.py             Pydantic request/response models
 │       ├── routers/
+│       │   ├── auth.py                POST /api/v1/auth/login, /logout, GET /me
+│       │   ├── exams.py, colleges.py  Minimal org-scoped CRUD backing the §14.3 upload picker
 │       │   ├── upload.py              POST /api/v1/upload
 │       │   ├── jobs.py                GET /api/v1/jobs, GET /api/v1/jobs/{id}
 │       │   └── export.py              POST /api/v1/export
@@ -56,17 +66,20 @@ examroll/
 │       │   ├── ai/
 │       │   │   ├── groq_client.py     Groq API wrapper (chat completions)
 │       │   │   ├── classifier.py      Detect: attendance / marks / roll-list
-│       │   │   └── extractor.py       AI-guided data extraction from raw text
+│       │   │   ├── extractor.py       AI-guided data extraction from raw text
+│       │   │   └── validation.py      Validates every AI-returned field (P0-10)
 │       │   ├── extractors/
 │       │   │   ├── pdf_extractor.py   pdfplumber text + table extraction
 │       │   │   └── excel_extractor.py openpyxl sheet reader
 │       │   ├── generators/
-│       │   │   └── excel_generator.py Styled openpyxl Excel output
+│       │   │   ├── excel_generator.py Styled openpyxl Excel output
+│       │   │   └── workbook_builder.py Shared formula-injection guard (_safe()) + styling helpers (P0-5)
 │       │   └── pipeline/
-│       │       └── processor.py       Orchestrator: extract → classify → generate
+│       │       └── processor.py       Orchestrator: extract → classify → generate → persisting_rows
 │       └── utils/
 │           ├── file_utils.py          MIME detection, size validation, safe paths
-│           └── subject_utils.py       Subject name normalization, abbreviation map
+│           ├── subject_utils.py       Subject name normalization, abbreviation map
+│           └── roll_sort.py           roll_sort_key() — flat, storable natural-sort key
 │
 ├── frontend/
 │   ├── index.html
@@ -125,23 +138,52 @@ examroll/
 
 ## API Endpoints
 
+All routes below except `/health` and `/api/v1/auth/*` require a valid session cookie
+(`require_org` router-level dependency) and are scoped to the caller's own `org_id` — see
+"Auth and tenancy" below.
+
 | Method | Route                       | Description                              |
 |--------|-----------------------------|------------------------------------------|
-| POST   | /api/v1/upload              | Upload ONE OR MORE PDF/Excel files (repeated `files` fields) as one batch job |
-| GET    | /api/v1/jobs                | List all jobs (paginated)                |
+| POST   | /api/v1/auth/login          | Log in; sets the session cookie          |
+| POST   | /api/v1/auth/logout         | Revoke the current session               |
+| GET    | /api/v1/auth/me             | Current user (used to detect an existing session on app load) |
+| GET    | /api/v1/exams               | List this org's exams                    |
+| POST   | /api/v1/exams               | Create an exam (§14.3 picker's inline-create) |
+| GET    | /api/v1/colleges            | List this org's colleges                 |
+| POST   | /api/v1/colleges            | Create a college (§14.3 picker's inline-create) |
+| POST   | /api/v1/upload               | Upload ONE OR MORE PDF/Excel files (repeated `files` fields) as one batch job; optional `exam_id`/`college_id` form fields |
+| GET    | /api/v1/jobs                | List this org's jobs (paginated)         |
 | GET    | /api/v1/jobs/{job_id}       | Get job status + extracted data          |
+| DELETE | /api/v1/jobs/{job_id}       | Delete a job and its files               |
 | POST   | /api/v1/export              | Generate + download Excel output         |
-| WS     | /ws/jobs/{job_id}           | Real-time job progress updates           |
+| GET    | /api/v1/export/{job_id}/download/{file_id} | Re-download a previously generated output |
+| WS     | /ws/jobs/{job_id}           | Real-time job progress updates (session cookie + Origin check) |
 | GET    | /health                     | Health check                             |
+
+### Auth and tenancy
+
+Server-side sessions (`app/auth.py`), not JWT — revocable without a revocation-list. `httponly`,
+`samesite=lax` cookie (`secure` only in production — see `DECISIONS.md`), argon2id password hashing.
+Every query filters by `org_id`; a cross-org request returns 404, never 403. No signup UI — the first
+user in an org is created by `backend/scripts/create_admin.py`. Full design in `DECISIONS.md` and
+`FUTURE_UNIFIED.md` §7.
 
 ---
 
 ## Database Schema
 
+Schema is now managed exclusively by Alembic (`backend/alembic/versions/`), not this section —
+`db_models.py` is the source of truth for exact columns/types/constraints; treat the tables below as
+an orientation summary, not the authoritative reference.
+
 ### jobs
 | Column          | Type     | Notes                                      |
 |-----------------|----------|--------------------------------------------|
 | id              | UUID     | Primary key                                |
+| org_id          | UUID     | FK → organizations.id, NOT NULL, indexed — the tenancy boundary |
+| created_by      | UUID     | FK → users.id, nullable                    |
+| exam_id         | UUID     | FK → exams.id, nullable (§14.3 picker)     |
+| college_id      | UUID     | FK → colleges.id, nullable (§14.3 picker)  |
 | filename        | VARCHAR  | Summary name (single filename, or "N files (first, …)" for a batch) |
 | file_path       | VARCHAR  | uploads/{job_id}/ directory holding all source files + outputs |
 | source_files    | TEXT     | JSON array of original uploaded filenames  |
@@ -154,6 +196,14 @@ examroll/
 | error_message   | TEXT     | Set on failure                             |
 | created_at      | DATETIME |                                            |
 | updated_at      | DATETIME |                                            |
+
+### Tenancy and exam model tables (2026-09-19)
+
+`organizations`, `users`, `auth_sessions` (migration `0001_add_tenancy`) and `colleges`, `courses`,
+`exams`, `subject_offerings`, `students`, `enrollments` (migration `0002_exam_model`) — see
+`db_models.py` for exact columns. Identity rules worth remembering: a paper's identity is
+`(org, exam, exam_code)`, never its name (names repeat across schemes/years); a student's identity is
+`(org, roll_number)`. Every table here carries `org_id NOT NULL` from its first migration.
 
 ### extracted_rows
 | Column     | Type    | Notes                                  |
@@ -172,14 +222,15 @@ examroll/
 |--------------------|------------------------------------------|
 | GROQ_API_KEY       | Groq API key (required)                  |
 | GROQ_MODEL         | Model ID (default: openai/gpt-oss-20b)   |
-| DATABASE_URL       | SQLAlchemy connection string             |
+| DATABASE_URL       | SQLAlchemy connection string — `sqlite+aiosqlite:///...` in dev, `postgresql+asyncpg://...` in production. `alembic/env.py` derives its own sync URL from this same value; schema is applied via `alembic upgrade head`, not at app boot. |
 | UPLOAD_DIR         | Directory for temp uploads               |
 | MAX_FILE_SIZE_MB   | Max upload size in MB                    |
-| CORS_ORIGINS       | Allowed CORS origins (comma-separated)   |
+| CORS_ORIGINS       | Allowed CORS origins (comma-separated). With same-origin serving in production this is mostly a local-dev concern (Vite on `localhost:5173`); also checked by `authorize_ws`'s `Origin` validation. |
 | CORS_ORIGIN_REGEX  | Optional anchored regex for preview origins |
-| APP_ENV            | development / production                 |
+| APP_ENV            | development / production — also gates the session cookie's `Secure` flag (see `DECISIONS.md`) |
 | LOG_LEVEL          | INFO / DEBUG / WARNING                   |
 | SQL_ECHO           | false (default) — MUST be false in production; app refuses to start if true+production (PII leak prevention) |
+| FRONTEND_DIST_DIR  | Path to the built frontend for same-origin serving (default `../frontend/dist`, relative to `backend/`). If missing, static serving is skipped — `pytest`/`npm run dev` are unaffected. |
 
 Frontend (build-time, Vite):
 
@@ -327,6 +378,56 @@ POST /api/v1/export → [excel_generator.py] → .xlsx blob → download
 - **Nothing defaults silently.** A defaulted status, an unrecognised status, a subject-name conflict, and a document yielding <=1 student across many pages all produce warnings on the Job. Silence is what let P0-1 ship.
 - Real-PDF regression is pinned at **167 students / 15 subjects**; `tests/golden/` holds page-text + expected-JSON fixtures. `*.pdf` is gitignored — real attestation sheets are student PII.
 
+### Same-origin serving, Postgres/Alembic, session auth, exam model (2026-09-19)
+- **Same-origin serving lands before auth, deliberately.** `main.py` mounts the built `frontend/dist`
+  (when it exists — guarded, so `pytest`/`npm run dev` are unaffected) alongside `/api/v1/*` and the
+  WebSocket, with a catch-all SPA route registered last so it can never shadow a more specific one.
+  This makes app and API the literal same origin, which is what lets the session cookie's
+  `samesite="lax"` work with zero CSRF machinery — chosen over a custom domain or `SameSite=None`;
+  full reasoning in `DECISIONS.md`.
+- **Alembic replaces the boot-time schema hacks entirely.** `_add_missing_nullable_columns()` and
+  `init_db()`'s `create_all()` are deleted from `database.py`; schema is now applied exclusively by
+  `alembic upgrade head`, run out-of-band before the app starts. `alembic/env.py` derives its DB URL
+  from the app's own `Settings` (never hardcoded) and runs in SQLite batch mode
+  (`render_as_batch=True`) so `ALTER` operations SQLite can't do in place still apply via
+  create-copy-swap — Postgres ignores the flag and uses its native `ALTER` either way. Three
+  migrations so far: `0000_baseline` (captures the pre-existing schema), `0001_add_tenancy`
+  (`organizations`/`users`/`auth_sessions` + `Job.org_id`/`created_by`), `0002_exam_model`
+  (`colleges`/`courses`/`exams`/`subject_offerings`/`students`/`enrollments` +
+  `Job.exam_id`/`college_id`). CI's `alembic-postgres` job verifies every migration's
+  upgrade/downgrade/upgrade round-trip against a real `postgres:16` container on every push — not
+  just SQLite, which is what local dev and the test suite still use.
+- **Auth is server-side sessions, argon2id, `httponly + samesite=lax` cookie** (`app/auth.py`) — see
+  the `Future Phases` section above for why sessions over JWT. `require_org` is a router-level
+  dependency on `jobs`/`export`/`upload`, so a route added later is protected by default. Every query
+  filters by `org_id` in the `WHERE` clause and returns **404, never 403**, on a cross-org hit — a 403
+  would confirm the row exists and turn the endpoint into an existence oracle for other tenants' data.
+  `authorize_ws` applies the same rule to the WebSocket (plus an `Origin` check, since CORS doesn't
+  cover WebSocket upgrades), validated **before** `accept()` is ever called. The frontend has a
+  matching `AuthContext`/`RequireAuth`/`Login` and a 401 interceptor that redirects to `/login`.
+  `backend/scripts/create_admin.py` is the only way to create a user — no signup UI, by design.
+- **The exam data model is the relational bridge extraction always needed but never had.**
+  Extraction has only ever written JSON blobs (`ExtractedData.students_json`/`subjects_json`); the
+  new `persisting_rows` pipeline stage (after `saving`) upserts real `Student`/`SubjectOffering`/
+  `Enrollment` rows once an exam is selected at upload — a safe no-op otherwise, since most uploads
+  still predate the picker. `SubjectOffering` is `UNIQUE(org, exam, exam_code)` — identity of a paper
+  is the exam code, never the name, which repeats across schemes and years. A cross-job name conflict
+  on the same `exam_code` is recorded, never silently overwritten (the cross-job counterpart to the
+  within-batch rule the extraction rewrite above already enforces). `roll_sort_key()`
+  (`utils/roll_sort.py`) is a flat, storable natural-sort key computed once at insert, distinct from
+  `subject_utils._natural_sort_key`'s in-process tuple sorter.
+- **A real bug found while wiring the exam model's matching-stage helper, not by design review:**
+  `processor.py`'s matching stage let the AI add a brand-new subject code to the merged map — not
+  just relabel one rule-based extraction already found — the same failure class as P0-1 (a silent
+  default that discards what actually happened). Fixed by extracting the logic into a pure,
+  unit-tested `apply_ai_subject_labels()`; full writeup in `DECISIONS.md`.
+- Suite grew from 115 to **135 passing, 0 failing**; `npm run build` succeeds. Verified end-to-end in
+  a real browser, not just automated tests (see `DECISIONS.md` and `PROGRESS.md`'s P05 notes for the
+  session-cookie/test-infrastructure gotchas found and fixed along the way).
+- **Landed on branch `p05-foundation-auth-postgres`, not yet merged to `main`** — `main` remains the
+  deployed v1, untouched, at the user's explicit request until this branch is tested and the merge is
+  a deliberate separate decision.
+
 ### Purely numeric subject codes & PIN filtering (2026-07-07)
 - Support for purely numeric codes: Updated `_CODE_RE` and `_PAIR_RE` in `subject_utils.py` and `excel_extractor.py` to match 5-to-6 digit purely numeric subject codes (e.g. `210236`) in addition to alphanumeric codes (e.g. `MBAN301`).
 - Address PIN/phone number filtering: Enhanced `extract_all_subjects` in `subject_utils.py` to programmatically ignore matches if they are preceded by `pin`, `phone`, `mobile`, or `tel` in the local 20-character context, preventing address PIN codes from being identified as subject codes.
@@ -337,26 +438,39 @@ POST /api/v1/export → [excel_generator.py] → .xlsx blob → download
 
 | Phase | Feature                                                                                  |
 |-------|------------------------------------------------------------------------------------------|
-| **2** | **Production Foundation** — test suite, Alembic, managed Postgres, extraction correctness, **session** auth + per-college data isolation, rate limiting, output sanitisation, privacy/retention. *No new features.* |
+| **2** | **Production Foundation** — test suite, Alembic, managed Postgres, extraction correctness, **session** auth + per-org data isolation, rate limiting, output sanitisation, privacy/retention. *No new features.* |
 | 3     | Object storage (S3/R2), durable queue replacing `BackgroundTasks`, PDF letterhead output, .docx output, print layout |
 | 4     | College branding upload, hall ticket generation, seating arrangement generation           |
 | 5     | Marks extraction, grade calculation, report cards, email delivery, admin dashboard, audit logs |
 
 **Phase 2 is `FUTURE.md` §9 Gate 0** — the 10 launch blockers found in the 2026-08-31 production
 audit. The task breakdown lives in `PROGRESS.md`; the finding-to-workstream map is `FUTURE.md` §11.
-Do not start Phase 3 work until Phase 2 closes: the app currently produces silently wrong output and
-has no authentication.
 
-Two corrections to earlier plans, both recorded in `FUTURE.md`:
+**Status as of 2026-09-19** (branch `p05-foundation-auth-postgres`, not yet merged to `main` — see
+`DECISIONS.md` and `PROGRESS.md`'s WS notes for full detail): extraction correctness, output
+sanitisation, Alembic + Postgres, session auth, and per-org tenant isolation are done. Still open
+before Phase 2 can close: rate limiting (P0-9), `/docs` still public in production (P2-30), no real
+`/health` DB check (P2-32), no security headers (P1-25), and all of privacy/retention/DPDP (§8) —
+**do not start Phase 3 work until those close.**
+
+Two corrections to earlier plans, both recorded in `FUTURE.md`, one since amended again in
+`DECISIONS.md`:
 
 - **Auth is server-side sessions, not JWT.** Sessions are revocable ("log out everywhere", "this
   account is compromised"); a stateless JWT needs a revocation list, which is a session table with
-  extra steps. Design in `FUTURE.md` §7. **This requires app and API to share a registrable domain**
-  (`examroll.com` + `api.examroll.com`) — on `pages.dev` + `onrender.com` they are cross-site and the
-  browser sends no cookie at all, on XHR or on the WebSocket handshake.
+  extra steps. Design in `FUTURE.md` §7.
+- **The custom-domain requirement was reversed in `DECISIONS.md` (2026-09-19).** `FUTURE.md` §7
+  originally required app and API to share a registrable domain (`examroll.com` +
+  `api.examroll.com`), because on the old `pages.dev` + `onrender.com` pair they were cross-site and
+  the browser sent no session cookie at all, on XHR or on the WebSocket handshake. **Built instead:**
+  FastAPI serves the built frontend itself (`main.py`, same-origin serving) — app and API become the
+  literal same origin, deleting the problem rather than routing around it with DNS, at zero cost and
+  no lead time. The auth code (`app/auth.py`) is identical either way; a custom domain remains a
+  valid upgrade path later, changing only deployment configuration.
 - **Postgres moved into Phase 2**, ahead of auth. The tenancy migration adds a `NOT NULL org_id`, and
   SQLite cannot alter a column to NOT NULL without a full table rebuild — doing it twice is waste.
-  Object storage stays in Phase 3.
+  Object storage stays in Phase 3. Driver support and every migration are verified against a real
+  Postgres container in CI; a managed Postgres project (Supabase/Neon) is not yet provisioned.
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Project:** ExamRoll
 **Current Phase:** Phase 2 — Production Foundation
-**Overall Status:** 🟡 Phase 1 complete; Phase 2 in progress — **not safe to publish** until Phase 2 closes (see `FUTURE.md`)
+**Overall Status:** 🟡 Phase 1 complete; Phase 2 in progress — same-origin serving, Postgres/Alembic, auth + tenant isolation, the exam data model, and the three remaining output/AI safety items (WS-A/C/D partly-E/G) landed 2026-09-19 on branch `p05-foundation-auth-postgres` (not yet merged to `main` — see DECISIONS.md and PROGRESS.md's WS notes below). **Still not safe to publish**: no rate limiting (P0-9), `/docs` still public in production (P2-30), no real `/health` DB check (P2-32), no security headers (P1-25), and WS-F (privacy/retention/DPDP) is entirely untouched (see `FUTURE.md`)
 
 ---
 
@@ -51,19 +51,19 @@
 - **404 page** — Friendly not-found page for unknown routes
 - **Page titles** — Each page updates `document.title` (Dashboard / Upload / History / Job Detail / 404)
 - **Smooth transitions** — Fade-in animation on every page navigation
-- **33 passing / 4 failing tests** — `pytest -q` reports **4 failed, 33 passed**. Passing: PDF extractor, Excel extractor (both formats), subject detection, Excel generator, roll-number sorting (numeric + natural), multi-file merge/dedupe, numeric subject code parsing. Failing: `tests/test_ai.py` and `tests/test_generators.py`, stale Prompt-1 scaffold stubs testing APIs that no longer exist. A permanently-red suite is functionally no suite — Phase 2 WS-A deletes them and adds real coverage (`FUTURE.md` P0-3)
+- **135 passing / 0 failing tests** (as of 2026-09-19, `p05-foundation-auth-postgres`) — grown from the Phase 1 baseline of 33 passing / 4 failing (the 4 were stale Prompt-1 scaffold stubs, deleted in WS-A) through extraction-correctness, AI-safety, auth/tenancy, and exam-model coverage. See the dated notes below for what each batch added.
 
 ## Known Limitations
 
 - 🔴 **One student per page — CONFIRMED DATA LOSS, not a caveat** — `pdf_extractor.py:60` uses `.search()`, which returns only the first match, so a page listing N students yields exactly **one**. Reproduced: a 3-student page returns 1, and the 2 discarded roll numbers are then emitted as *subject columns*. Affects roll lists, attendance sheets and seating plans (30–60 students/page). Fixed in Phase 2 WS-B (`FUTURE.md` P0-1)
 - **ASCII-only roll numbers** — The roll-number regex (`\d{4,12}` or `[A-Z0-9]{5,15}`) may miss alphanumeric roll formats from other universities
-- **No authentication** — All data is visible to anyone with access to the running server
-- **SQLite only** — Not suitable for concurrent multi-user production use
+- ~~No authentication~~ — **Resolved 2026-09-19** (WS-D): server-side session auth + org-scoped tenant isolation now sit in front of every job/export/download route and the WebSocket. Not yet done: per-org rate limiting (P0-9) and disabling `/docs` in production (P2-30).
+- ~~SQLite only~~ — **Resolved 2026-09-19** (WS-A): schema now lives entirely in Alembic migrations, with async Postgres (`asyncpg`) as the intended production driver — verified against a real `postgres:16` container in CI. Local dev keeps SQLite. Not yet done: actually provisioning a managed Postgres project (Supabase/Neon) for the pilot deploy.
 - **Local storage only** — Uploaded files and Excel outputs live in `uploads/` on disk; no cloud backup
 - **Groq dependency** — Without a valid API key the document is classified as "unknown" and no AI subject enrichment runs (rule-based extraction still works)
 - **Single-sheet output only** — The "per-subject sheets" output type shown in the UI is listed as coming soon
 - 🔴 **Numeric code collision — CONFIRMED, not hypothetical** — `_CODE_RE`'s `\d{5,6}` branch overlaps `_ROLL_RE`'s `\d{4,12}`, so 5–6 digit roll numbers (the norm in Indian universities) *are* parsed as subject codes and become columns in the delivered workbook. Reproduced. The `named if named else all_subjects` fallback masks it only when a `CODE - Name` pair was found. Fixed in Phase 2 WS-B (`FUTURE.md` P0-2)
-- 🔴 **Excel formula injection** — roll numbers and AI-supplied subject names starting with `=`, `+`, `-` or `@` are written as **live formulas** by openpyxl. A crafted upload produces a workbook that executes on the exam clerk's machine. Fixed in Phase 2 WS-C (`FUTURE.md` P0-5)
+- ~~🔴 **Excel formula injection**~~ — **Fixed 2026-09-19** (WS-C): every extracted/AI-derived value now routes through `workbook_builder.py`'s `_safe()` guard before reaching a cell; the generator's own COUNTA/SUM totals are unaffected. Verified with a payload shaped like an actual attack.
 
 ## Phase 2 Tasks — Production Foundation
 
@@ -90,9 +90,9 @@ Full diagnosis and fix code for every item is in `FUTURE.md`.
 **WS-A · Foundation** *(blocks WS-D)*
 - [x] Delete stale `tests/test_ai.py` + `tests/test_generators.py`; add `backend/pytest.ini` (P0-3) — 2026-09-18
 - [x] Add `httpx`; first `TestClient` router tests — none exist today (P0-3) — 2026-09-18
-- [ ] Adopt Alembic: create `backend/alembic/`, add the dep, baseline migration; fix the sync driver in `alembic.ini` (P2-44)
-- [ ] Delete the hand-rolled `_add_missing_nullable_columns` boot migration (P2-44)
-- [ ] Migrate to managed Postgres (Neon/Supabase free tier); add `asyncpg` (P1-26, P2-26, P2-27)
+- [x] Adopt Alembic: create `backend/alembic/`, add the dep, baseline migration; fix the sync driver in `alembic.ini` (P2-44) — 2026-09-19
+- [x] Delete the hand-rolled `_add_missing_nullable_columns` boot migration (P2-44) — 2026-09-19
+- [x] Postgres driver support (`asyncpg` + `psycopg2-binary` for Alembic's sync runner); migrations verified end-to-end against a real `postgres:16` container in CI (P1-26, P2-26, P2-27) — 2026-09-19. **Not yet done:** actually provisioning a Supabase (or Neon) project — needs an account/credentials this environment doesn't have; `DATABASE_URL=postgresql+asyncpg://...` is the only change required when that happens.
 - [x] GitHub Actions CI: `pytest` + `npm run build` on push (P3-63) — 2026-09-18
 
 **P02 notes (2026-09-18):**
@@ -117,8 +117,8 @@ Full diagnosis and fix code for every item is in `FUTURE.md`.
 - [x] Paper `exam_code`, `paper_no`, `group_label`, optional at extraction (§14.2) — 2026-09-19
 - [x] Conflict rule replaces "longer name wins" (§14.4) — 2026-09-19
 - [x] §14.5 tests (4 of 5) + golden-file harness — 2026-09-19
-- [ ] §14.5 re-upload test ("N already enrolled", zero new `Student` rows) — **deferred to P09**: needs the `students`/`enrollments` tables from migration `0002_exam_model`
-- [ ] Exam + college picker at upload (§14.3) — **P10**
+- [x] §14.5 re-upload test ("N already enrolled", zero new `Student` rows) — 2026-09-19, `backend/tests/test_exam_model.py`
+- [x] Exam + college picker at upload (§14.3) — 2026-09-19, `frontend/src/components/upload/ExamCollegePicker.jsx`
 
 **P03 notes (2026-09-18):**
 - `backend/tests/test_extraction_correctness.py`: 8 tests pinning P0-1/P0-2, committed red with `xfail(strict=True)` so CI stayed green while the suite recorded the defects. Verified with `--runxfail` that each failed on its intended assertion.
@@ -135,28 +135,38 @@ Full diagnosis and fix code for every item is in `FUTURE.md`.
 - Found during P04, not fixed here: `_combined_text_sample` still drops files 8-10 of a 10-file batch (P2-24); `detect_subject_code_pattern` still uses the legacy `_CODE_RE`.
 - **Behaviour reversal:** `merge_subject_maps` no longer picks the longer name on a conflict (§14.4) and now returns a 3-tuple. `test_merge_subject_maps_conflict_keeps_longer_name_and_warns` was replaced, not weakened; CLAUDE.md updated to match.
 
+**P05 notes (2026-09-19, branch `p05-foundation-auth-postgres`, not yet merged to `main`):**
+- Scope: same-origin serving, WS-C (output/AI safety), WS-A's Alembic+Postgres half, WS-D (auth+tenancy) in full except rate limiting, and WS-G's two remaining items (exam data model, exam+college picker). Full reasoning for every non-obvious decision is in the new `DECISIONS.md` at the repo root — that file, not this one, is the place to understand *why*.
+- **Same-origin serving** (before auth, since auth's cookie design depends on it): FastAPI now mounts the built `frontend/dist` alongside `/api/v1/*` and the WebSocket when it exists, guarded so `pytest`/`npm run dev` are unaffected. Chosen over a custom domain or `SameSite=None`+CSRF specifically to delete the cross-site cookie problem rather than work around it — see DECISIONS.md's first entry.
+- **Alembic + Postgres** (WS-A): `backend/alembic/` scaffolded from scratch; `env.py` derives its DB URL from the app's own `Settings` (never hardcoded) and runs in SQLite batch mode. `_add_missing_nullable_columns` and `init_db()` deleted — schema is now Alembic-only, applied out-of-band before the app starts. `0000_baseline` autogenerated and hand-verified against `db_models.py`. CI gained an `alembic-postgres` job (real `postgres:16` service container) that every migration in this phase was verified against, not just SQLite.
+- **Auth + tenancy** (WS-D): `Organization`/`User`/`AuthSession` + `Job.org_id`/`created_by` via `0001_add_tenancy`; `app/auth.py` (argon2id, httpOnly `samesite=lax` session cookie, `current_user`/`require_org`); every job/export/download query now filters by `org_id` and returns 404 (never 403) cross-org; `authorize_ws` gates the WebSocket the same way before `accept()`. Frontend: `/login`, `AuthContext`, `RequireAuth` route guard, 401→redirect interceptor. `backend/scripts/create_admin.py` is the (deliberate, no-signup-UI) way to create the first user. Cross-tenant isolation (`test_tenancy.py`) and full auth-flow tests (`test_auth.py`, including WebSocket auth) both new.
+- **Exam data model** (WS-G): `0002_exam_model` adds `colleges`/`courses`/`exams`/`subject_offerings`/`students`/`enrollments` (all `org_id NOT NULL` from creation) + `Job.exam_id`/`college_id`. New `persisting_rows` pipeline stage upserts real rows when an exam was selected at upload (a safe no-op otherwise — most uploads still predate the picker). New `roll_sort_key()` util. Minimal `exams`/`colleges` CRUD routers back a new upload-wizard picker (`ExamCollegePicker.jsx`) that gates file acceptance until both are chosen, with inline-create. The two §14.5 tests deferred since P04 (re-upload → "N already enrolled" + zero new `Student` rows; cross-job name conflict recorded, not silently overwritten) are now real, in `test_exam_model.py`.
+- Suite: **135 passed, 0 failed** (was 115 at the end of P04's branch). `npm run build` succeeds. Verified end-to-end in a real browser (not just automated tests): fresh migrated DB → `create_admin.py` → login → redirect-to-intended-page → create an exam and a college through the running UI → DropZone appears only once both are set.
+- Two real bugs found and fixed in passing (both in DECISIONS.md): `processor.py`'s matching stage let the AI add a brand-new subject code the rule-based extractor never found (not just relabel one it did) — same failure class as P0-1; and a stale `.gitignore` rule (`alembic/versions/`) would have silently excluded every migration file from every future commit.
+- **Not done this phase, left for later:** `slowapi` rate limiting (P0-9), disabling `/docs` in production (P2-30), a real `/health` DB check (P2-32), security headers (P1-25), all of WS-F (privacy/retention/DPDP — §8), and actually provisioning a managed Postgres project (the driver and migrations are verified; no account exists yet).
+
 **WS-C · Output and AI safety**
-- [ ] `_safe()` formula-injection guard on every user/AI sink in `excel_generator.py` (P0-5)
-- [ ] `app/services/ai/validation.py`; validate every AI-returned field (P0-10)
-- [ ] Prompt fencing; stop the AI inventing subject columns (P0-10)
+- [x] `_safe()` formula-injection guard on every user/AI sink in `excel_generator.py` (P0-5) — 2026-09-19, `app/services/generators/workbook_builder.py`
+- [x] `app/services/ai/validation.py`; validate every AI-returned field (P0-10) — 2026-09-19
+- [x] Prompt fencing; stop the AI inventing subject columns (P0-10) — 2026-09-19, real bug found and fixed in `processor.py`'s matching stage (see DECISIONS.md)
 - [ ] Groq daily call budget — keep `max_tokens` at 4096, see the 8000 TPM note below (P0-9)
 
 **WS-D · Auth and tenancy** *(needs WS-A)*
-- [ ] Register the custom domain — app on apex, API on `api.` subdomain (hard prerequisite for the cookie design, has lead time)
-- [ ] `Organization` / `User` / `Session` models + `Job.org_id` NOT NULL (P0-4)
-- [ ] Alembic `0001_add_tenancy`: nullable → backfill legacy org → NOT NULL (P0-4)
-- [ ] `app/auth.py` — argon2id, session cookie, `current_user` / `require_org` (P0-4)
-- [ ] Filter **every** query by `org_id` in the WHERE clause; router-level dependency (P0-4)
-- [ ] `authorize_ws` — session cookie + `Origin` allowlist; delete the duplicate WS endpoint (P0-8, P1-23)
-- [ ] `slowapi` tiered rate limits keyed on org then IP; uvicorn `--proxy-headers` (P0-9)
-- [ ] Frontend `/login`, auth context, 401 handling
-- [ ] Cross-tenant isolation test matrix (`FUTURE.md` §7.6)
+- [x] ~~Register the custom domain~~ — **superseded**: same-origin serving (FastAPI serves the built frontend) chosen instead, 2026-09-19. Deletes the cross-site cookie problem entirely rather than working around it with DNS; see DECISIONS.md. The auth code is identical either way — a custom domain remains a valid upgrade later.
+- [x] `Organization` / `User` / `AuthSession` models + `Job.org_id` NOT NULL (P0-4) — 2026-09-19
+- [x] Alembic `0001_add_tenancy`: nullable → backfill pilot org → NOT NULL (P0-4) — 2026-09-19 (backfill target *is* the pilot org, not a separate throwaway legacy org — see DECISIONS.md)
+- [x] `app/auth.py` — argon2id, session cookie, `current_user` / `require_org` (P0-4) — 2026-09-19
+- [x] Filter **every** query by `org_id` in the WHERE clause; router-level dependency (P0-4) — 2026-09-19
+- [x] `authorize_ws` — session cookie + `Origin` allowlist; delete the duplicate WS endpoint (P0-8, P1-23) — 2026-09-19
+- [ ] `slowapi` tiered rate limits keyed on org then IP; uvicorn `--proxy-headers` (P0-9) — not done this phase
+- [x] Frontend `/login`, auth context, 401 handling — 2026-09-19
+- [x] Cross-tenant isolation test matrix (`FUTURE.md` §7.6) — 2026-09-19, `backend/tests/test_tenancy.py`
 
 **WS-E · Request hardening**
-- [ ] `BodySizeLimitMiddleware` — bodies currently hit disk before any size check (P0-6)
-- [ ] Disable `/docs`, `/redoc`, `/openapi.json` in production (P2-30)
-- [ ] Real `/health` DB check returning 503 — currently hardcoded `"connected"` (P2-32)
-- [ ] Security headers + `frontend/public/_headers`; drop `allow_credentials` until WS-D needs it (P1-25)
+- [x] `BodySizeLimitMiddleware` — bodies currently hit disk before any size check (P0-6) — 2026-09-19
+- [ ] Disable `/docs`, `/redoc`, `/openapi.json` in production (P2-30) — not done this phase
+- [ ] Real `/health` DB check returning 503 — currently hardcoded `"connected"` (P2-32) — not done this phase
+- [ ] Security headers + `frontend/public/_headers`; drop `allow_credentials` until WS-D needs it (P1-25) — not done this phase (WS-D now needs `allow_credentials`, so this item's second half no longer applies as written)
 
 **WS-F · Privacy and retention**
 - [ ] Retention janitor — the mechanism that makes a stated retention period true (P1-16)
