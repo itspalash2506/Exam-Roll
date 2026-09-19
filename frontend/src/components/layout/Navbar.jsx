@@ -1,5 +1,6 @@
-import { Link } from 'react-router-dom'
-import { Plus, Clock } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Plus, Clock, LogOut } from 'lucide-react'
+import { useAuth } from '../../context/AuthContext.jsx'
 
 function Wordmark() {
   return (
@@ -15,6 +16,14 @@ function Wordmark() {
 }
 
 export default function Navbar() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  const handleLogout = async () => {
+    await logout()
+    navigate('/login', { replace: true })
+  }
+
   return (
     <nav className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-line bg-canvas px-6">
       <Wordmark />
@@ -34,6 +43,16 @@ export default function Navbar() {
           <Plus size={15} />
           New Upload
         </Link>
+        {user && (
+          <button
+            type="button"
+            onClick={handleLogout}
+            title={`Sign out (${user.email})`}
+            className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-small font-medium text-muted transition-colors duration-fast hover:bg-line/60 hover:text-ink"
+          >
+            <LogOut size={15} />
+          </button>
+        )}
       </div>
     </nav>
   )

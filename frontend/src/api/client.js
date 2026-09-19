@@ -13,11 +13,28 @@ const api = axios.create({
   // Free-tier hosts (Render) sleep on idle and can take ~a minute to cold-start;
   // a 60s timeout made the very first request after a sleep fail spuriously.
   timeout: 120_000,
+  // Required for the httpOnly session cookie to actually be sent (DECISIONS.md,
+  // 2026-09-19) — without this, axios never attaches examroll_session even
+  // though the browser has it, and every authenticated call 401s.
+  withCredentials: true,
 })
+
+// A 401 means the session is missing/expired/revoked — send the user to
+// /login rather than surfacing it as a generic error toast. Skips the
+// login/me endpoints themselves so a wrong-password attempt or the initial
+// "am I logged in?" check on app load can still handle their own 401
+// without an unwanted redirect loop.
+const AUTH_ENDPOINTS = ['/auth/login', '/auth/me']
 
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    const path = err.config?.url || ''
+    const isAuthEndpoint = AUTH_ENDPOINTS.some((p) => path.includes(p))
+    if (err.response?.status === 401 && !isAuthEndpoint && window.location.pathname !== '/login') {
+      window.location.assign('/login')
+      return Promise.reject(new Error('Not authenticated'))
+    }
     const message =
       err.response?.data?.detail ||
       err.response?.data?.error ||
@@ -26,6 +43,15 @@ api.interceptors.response.use(
     return Promise.reject(new Error(message))
   },
 )
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+
+export const login = (email, password) =>
+  api.post('/auth/login', { email, password })
+
+export const logout = () => api.post('/auth/logout')
+
+export const me = () => api.get('/auth/me')
 
 // Multi-file upload: repeated "files" fields, one Job for the whole batch.
 export const uploadFiles = (files, onProgress) => {
