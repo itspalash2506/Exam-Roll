@@ -2,14 +2,18 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import authorize_ws
 from app.config import get_settings
+from app.database import get_db
 from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.websocket_manager import manager
+from app.routers import auth as auth_router
 from app.routers import upload, jobs, export
 
 _settings = get_settings()
@@ -52,6 +56,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router.router, prefix="/api/v1")
 app.include_router(upload.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
@@ -95,7 +100,12 @@ async def health_check():
 
 
 @app.websocket("/ws/jobs/{job_id}")
-async def websocket_job(websocket: WebSocket, job_id: str):
+async def websocket_job(websocket: WebSocket, job_id: str, db: AsyncSession = Depends(get_db)):
+    # authorize_ws MUST run before manager.connect() — that call does
+    # websocket.accept() internally, and once a handshake succeeds there is
+    # no taking it back (P0-8, DECISIONS.md 2026-09-19).
+    if await authorize_ws(websocket, job_id, db) is None:
+        return
     await manager.connect(websocket, job_id)
     try:
         while True:

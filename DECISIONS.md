@@ -203,3 +203,57 @@ build output — they belong in version control the same way the ORM models do. 
 top-level rule.
 
 ---
+
+## 2026-09-19 — `Secure` cookie flag needed to be environment-conditional
+
+**What happened.** The session cookie was implemented exactly as designed — `httponly=True`,
+`secure=True`, `samesite="lax"`. Login worked (200 OK, `Set-Cookie` present), but every
+following request from the same test client came back `401 Unauthorized` as if no cookie had
+ever been sent.
+
+**Why it happened.** A `Secure` cookie is only sent back over an HTTPS connection, per RFC
+6265. Real browsers special-case `localhost` as a "potentially trustworthy origin" and send
+`Secure` cookies over plain `http://localhost` anyway — which is why this would have looked
+fine in a real browser during local dev. httpx's test client (`ASGITransport`, base URL
+`http://test`) follows the RFC strictly, with no such exception, and silently drops the
+cookie rather than erroring — so the failure surfaced as an unrelated-looking 401 on the
+request *after* a successful login, not as anything pointing at the cookie itself.
+
+**What it would have cost to ignore.** Nothing broken in production (real HTTPS deployments
+would never hit this), but the entire authenticated test suite would either have needed
+hand-crafted cookies (bypassing the real `create_session`/`current_user` code path the tests
+are supposed to exercise) or would have stayed permanently red — either silently weakening
+exactly the tests meant to catch an auth regression.
+
+**What we decided and why.** `secure=settings.app_env == "production"` instead of a hardcoded
+`True`. Production is always served over HTTPS, so this never actually weakens the real
+deployment — it only affects local dev and tests, both of which are plain HTTP by nature and
+now get real, working session cookies through the real login flow.
+
+---
+
+## 2026-09-19 — Test DB engine needed `NullPool` for the WebSocket auth tests
+
+**What happened.** Testing `authorize_ws` requires a real WebSocket handshake, which
+httpx's `ASGITransport` (used by every other test in the suite) cannot do at all — it has
+no WebSocket support. The only option is Starlette's synchronous `TestClient`, which runs
+the ASGI app in its own background thread with its own event loop. A test needing both an
+async fixture (to set up two separate logged-in orgs) and `TestClient` (to open the
+WebSocket) failed with `sqlite3.OperationalError: no active connection`.
+
+**Why it happened.** A pooled `aiosqlite` connection is tied to the event loop that created
+it. The async test fixtures run on pytest-asyncio's loop; `TestClient` runs the app on a
+different loop in its own thread. The default connection pool reused a connection across
+that loop boundary, which aiosqlite does not support.
+
+**What it would have cost to ignore.** The WebSocket auth tests — covering exactly the
+scenario `authorize_ws` exists for, a foreign-org job producing the same closed connection
+as a missing one — would have stayed flaky or unwritable, leaving the one part of auth that
+can't reuse the HTTP 404-not-403 pattern effectively untested.
+
+**What we decided and why.** `poolclass=NullPool` on the test engine: every connection
+checkout opens a fresh `aiosqlite` connection rather than reusing one from a pool, so no
+connection can ever be reused across a loop boundary in the first place. Session-scoped test
+DB, in-process, so the minor overhead of not pooling is negligible.
+
+---

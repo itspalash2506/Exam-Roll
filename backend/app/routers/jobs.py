@@ -8,12 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.auth import require_org
 from app.database import get_db
 from app.models.db_models import Job
 from app.schemas.schemas import JobDetailResponse, JobResponse
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["jobs"])
+# require_org at the ROUTER level (not per-endpoint) so a route added later
+# is protected by default rather than by memory (P0-4, DECISIONS.md
+# 2026-09-19).
+router = APIRouter(tags=["jobs"], dependencies=[Depends(require_org)])
 
 
 def _parse_json_list(raw: str | None) -> list[str]:
@@ -98,33 +102,43 @@ def _job_to_detail(job: Job) -> JobDetailResponse:
 async def list_jobs(
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    org_id: str = Depends(require_org),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Job).order_by(Job.created_at.desc()).offset(skip).limit(limit)
+        select(Job)
+        .where(Job.org_id == org_id)
+        .order_by(Job.created_at.desc()).offset(skip).limit(limit)
     )
     jobs = result.scalars().all()
     return [_job_to_response(j) for j in jobs]
 
 
 @router.get("/jobs/{job_id}", response_model=JobDetailResponse)
-async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def get_job(
+    job_id: str, org_id: str = Depends(require_org), db: AsyncSession = Depends(get_db)
+):
     result = await db.execute(
         select(Job)
-        .where(Job.id == job_id)
+        .where(Job.id == job_id, Job.org_id == org_id)
         .options(selectinload(Job.extracted_data), selectinload(Job.output_files))
     )
     job = result.scalar_one_or_none()
     if not job:
+        # 404, never 403: a 403 would confirm the job exists and turn this
+        # endpoint into an existence oracle for other tenants' data
+        # (DECISIONS.md, 2026-09-19).
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_to_detail(job)
 
 
 @router.delete("/jobs/{job_id}", status_code=204)
-async def delete_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_job(
+    job_id: str, org_id: str = Depends(require_org), db: AsyncSession = Depends(get_db)
+):
     result = await db.execute(
         select(Job)
-        .where(Job.id == job_id)
+        .where(Job.id == job_id, Job.org_id == org_id)
         .options(selectinload(Job.output_files))
     )
     job = result.scalar_one_or_none()

@@ -3,22 +3,21 @@ import logging
 import os
 import shutil
 import uuid
-from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import current_user, require_org
 from app.config import get_settings
 from app.database import AsyncSessionLocal, get_db
-from app.models.db_models import Job
+from app.models.db_models import Job, User
 from app.schemas.schemas import UploadResponse
 from app.services.pipeline.processor import processor
 from app.utils.file_utils import detect_file_type, stream_upload_to_job_dir
 from app.websocket_manager import manager
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["upload"])
+router = APIRouter(tags=["upload"], dependencies=[Depends(require_org)])
 _settings = get_settings()
 
 
@@ -38,6 +37,7 @@ def _batch_summary_name(names: list[str]) -> str:
 async def upload_file(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
+    user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not files:
@@ -88,6 +88,8 @@ async def upload_file(
 
     job = Job(
         id=job_id,
+        org_id=user.org_id,
+        created_by=user.id,
         filename=_batch_summary_name(names),
         file_type=file_types[0] if len(set(file_types)) == 1 else "mixed",
         file_path=os.path.join(_settings.upload_dir, job_id),
@@ -108,29 +110,10 @@ async def upload_file(
     )
 
 
-@router.websocket("/ws/{job_id}")
-async def websocket_job_progress(websocket: WebSocket, job_id: str):
-    await manager.connect(websocket, job_id)
-    try:
-        # Send current job state immediately on connect
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Job).where(Job.id == job_id))
-            job = result.scalar_one_or_none()
-            if job:
-                await websocket.send_text(json.dumps({
-                    "progress": job.progress,
-                    "status": job.status,
-                    "message": f"Job is {job.status}",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }))
-            else:
-                await websocket.send_text(json.dumps({"error": "Job not found"}))
-
-        # Keep connection alive until client disconnects or job finishes
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, job_id)
-    except Exception as exc:
-        logger.warning("WebSocket error for job %s: %s", job_id, exc)
-        manager.disconnect(websocket, job_id)
+# The WebSocket endpoint that used to live here (/api/v1/ws/{job_id}) was
+# dead code — the frontend has only ever connected to the one on main.py
+# (/ws/jobs/{job_id}), confirmed via client.js. Two near-identical WebSocket
+# endpoints with divergent behaviour is a standing maintenance hazard: a fix
+# applied to one silently misses the other, which is exactly what happened
+# here — this one sent a state snapshot on connect and the real one didn't,
+# until main.py's endpoint gained authorize_ws (DECISIONS.md, 2026-09-19).

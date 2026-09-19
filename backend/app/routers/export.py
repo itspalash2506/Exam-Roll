@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import require_org
 from app.config import get_settings
 from app.database import get_db
 from app.models.db_models import Job, OutputFile
@@ -20,7 +21,7 @@ from app.schemas.schemas import (
 from app.services.generators.excel_generator import generate_excel
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["export"])
+router = APIRouter(tags=["export"], dependencies=[Depends(require_org)])
 _settings = get_settings()
 
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -47,9 +48,15 @@ def _load_extracted(job: Job) -> ExtractedDataSchema:
 
 
 @router.post("/export")
-async def export_job(req: ExportRequest, db: AsyncSession = Depends(get_db)):
+async def export_job(
+    req: ExportRequest,
+    org_id: str = Depends(require_org),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(
-        select(Job).where(Job.id == req.job_id).options(selectinload(Job.extracted_data))
+        select(Job)
+        .where(Job.id == req.job_id, Job.org_id == org_id)
+        .options(selectinload(Job.extracted_data))
     )
     job = result.scalar_one_or_none()
     if not job:
@@ -101,12 +108,17 @@ async def export_job(req: ExportRequest, db: AsyncSession = Depends(get_db)):
 
 @router.get("/export/{job_id}/download/{file_id}")
 async def redownload_output(
-    job_id: str, file_id: str, db: AsyncSession = Depends(get_db)
+    job_id: str,
+    file_id: str,
+    org_id: str = Depends(require_org),
+    db: AsyncSession = Depends(get_db),
 ):
+    # OutputFile carries no org_id of its own — join through Job, the same
+    # pattern as every other tenant-scoped query.
     result = await db.execute(
-        select(OutputFile).where(
-            OutputFile.id == file_id, OutputFile.job_id == job_id
-        )
+        select(OutputFile)
+        .join(Job, Job.id == OutputFile.job_id)
+        .where(OutputFile.id == file_id, OutputFile.job_id == job_id, Job.org_id == org_id)
     )
     output_file = result.scalar_one_or_none()
     if not output_file:

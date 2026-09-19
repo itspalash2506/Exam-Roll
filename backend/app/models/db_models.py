@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Float, String, Integer, Text, DateTime, ForeignKey
+from sqlalchemy import Boolean, Float, String, Integer, Text, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -15,10 +15,85 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Organization(Base):
+    """The tenancy boundary (DECISIONS.md, 2026-09-19; FUTURE_UNIFIED.md §7,
+    §13). All data isolation is by org, not by user — staff at one exam
+    centre share a workspace. Every other table's rows belong to exactly one
+    Organization; every query in every router MUST filter by it."""
+
+    __tablename__ = "organizations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # §13.2's amended columns — the tenant is an exam CENTRE (of a
+    # university), not "a college", so these are the two other identifying
+    # facts on every printed docket. Nullable for now: a pilot org created by
+    # migration 0001 may not have real values yet.
+    centre_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    university_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Retention window in days. Kept as a single value for this phase; §16.5
+    # replaces it with three separate tiers (source files / raw AI text /
+    # records) once retention enforcement is actually built — not yet.
+    retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    # Per-org opt-out from sending document text to the third-party Groq API.
+    ai_processing_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    # argon2id via argon2-cffi. Never bcrypt (silently truncates at 72 bytes),
+    # never a bare/unsalted hash.
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # admin|member for this phase; widens to admin|controller|clerk (§16.4)
+    # once roles are actually enforced anywhere — not yet, so keeping it
+    # narrow rather than pretending three roles already mean something.
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuthSession(Base):
+    """Server-side session, not a JWT — a logout or a compromised account is
+    one UPDATE (revoked_at) away, with no revocation-list machinery to build.
+    Named AuthSession, not Session, to avoid colliding with a future
+    ExamSession model (FUTURE_UNIFIED.md §13.2)."""
+
+    __tablename__ = "auth_sessions"
+
+    # The cookie carries a random token; only its SHA-256 is stored here, so
+    # a DB read alone never yields a usable credential.
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    # NOT NULL and indexed — a nullable org_id would reintroduce exactly the
+    # bug this fixes, since a NULL never matches a `WHERE org_id = :org_id`
+    # filter (DECISIONS.md, 2026-09-19).
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Multi-file batches: JSON array of the original uploaded filenames, and how
