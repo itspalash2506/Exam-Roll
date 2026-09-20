@@ -17,7 +17,7 @@ from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.websocket_manager import manager
 from app.routers import auth as auth_router
 from app.routers import settings as settings_router
-from app.routers import colleges, exams, rooms, sessions, upload, jobs, export
+from app.routers import colleges, exams, plans, rooms, sessions, upload, jobs, export
 
 _settings = get_settings()
 
@@ -70,6 +70,10 @@ app.include_router(colleges.router, prefix="/api/v1")
 app.include_router(settings_router.router, prefix="/api/v1")
 app.include_router(rooms.router, prefix="/api/v1")
 app.include_router(sessions.router, prefix="/api/v1")
+# After `sessions`, since it declares /sessions/{id}/plans in full rather
+# than taking a prefix of its own — the two halves of the plan resource
+# (create-under-session, then everything by plan id) live in one router.
+app.include_router(plans.router, prefix="/api/v1")
 app.include_router(upload.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")

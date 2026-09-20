@@ -35,3 +35,11 @@ argon2-cffi>=23.1.0
 # so the R2 code path has real automated coverage without live credentials.
 boto3>=1.34.0
 moto[s3]>=5.0.0
+
+# Seating allocator property tests (FUTURE_UNIFIED.md §15.4 invariants,
+# §21 #4). The allocator is a pure function over random rooms, papers and
+# strategy combinations — exactly the shape example-based tests are worst
+# at covering, and a wrong seating chart still prints beautifully, so the
+# invariants are checked over hundreds of generated cases rather than a
+# handful of hand-written ones.
+hypothesis>=6.100.0

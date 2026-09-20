@@ -488,6 +488,162 @@ class SessionPaper(Base):
     )
 
 
+# ── Seating plans (WS-H, FUTURE_UNIFIED.md §13.2, §15.3–§15.5; migration
+# 0004_seating) ─────────────────────────────────────────────────────────────
+
+
+class SeatingPlan(Base):
+    """One versioned allocation of one session's roster into rooms (§15.5).
+
+    Lifecycle: `draft` → clerk edits (move / swap / lock / block a seat /
+    re-run) → `published` by a controller, after which it is frozen and any
+    further change is a NEW version that marks this one `superseded`.
+    Regeneration after publish is always explicit — attendance rows will
+    reference the plan in force at the session's start, so a plan that could
+    silently change under them is a legal record that cannot be trusted.
+    """
+
+    __tablename__ = "seating_plans"
+    __table_args__ = (
+        # One version number per session. Not in §13.2's column list, but
+        # `version` is meaningless without it and a duplicate would make
+        # "the plan in force" ambiguous at exactly the wrong moment.
+        UniqueConstraint("session_id", "version", name="uq_plan_session_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("exam_sessions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft"
+    )  # draft|published|superseded
+    # The §15.3 strategy table as stored JSON — every key, resolved (the
+    # allocator normalises defaults BEFORE this is written), so re-running a
+    # plan a year later cannot pick up a changed default and silently
+    # produce a different chart.
+    strategy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    seed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Seats the allocator deliberately left EMPTY to satisfy the adjacency
+    # rule: [{"room_id", "col_index", "seat_index", "bench_pos", "reason"}, …].
+    # Stored rather than re-derived because after the fact an adjacency gap
+    # and a seat the roster simply never reached look identical, and the
+    # difference is what tells a superintendent whether a room is full.
+    gaps: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    created_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    published_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class SeatingPlanRoom(Base):
+    """Which rooms this plan uses, in which order, and which exam each one
+    serves (§15.2 step 5 — "B.B.LLB goes to the labs and P.G. to Rooms 1–5").
+
+    Carries its own `id` and `org_id` rather than being a pure association
+    table, for the same two reasons SessionPaper does: §13.1 rule 3 wants
+    `org_id NOT NULL` on every table so Gate M's tenant filter only ever adds
+    a WHERE and never a column, and a surrogate key keeps the row addressable
+    from the API by a single id.
+
+    `exam_id` NULL means the room takes any paper in the session.
+    """
+
+    __tablename__ = "seating_plan_rooms"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "room_id", name="uq_plan_room"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    plan_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("seating_plans.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    exam_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("exams.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class SeatAssignment(Base):
+    """One candidate on one seat (§13.2).
+
+    Indices are **1-based on all three axes**, the same convention
+    `Room.blocked_seats` and `utils/room_capacity.py` use — `col_index=1,
+    seat_index=1, bench_pos=1` is the first place on the first bench of the
+    first column. There is no translation anywhere: a blocked
+    `{"col": 1, "seat": 1}` names exactly the bench this row would sit on.
+
+    `locked` means a human put this candidate here on purpose; a re-run
+    preserves it. Moving or swapping a seat by hand sets it, because a
+    re-run that quietly discarded a clerk's correction is the silent-default
+    failure class this codebase keeps paying for.
+    """
+
+    __tablename__ = "seat_assignments"
+    __table_args__ = (
+        # §13.2's two constraints, verbatim. The first makes double-booking
+        # a seat impossible at the storage layer; the second makes seating
+        # one candidate twice for the same paper impossible. The validator
+        # checks both again anyway — the DB protects the rows, the validator
+        # protects the plan a human is about to print.
+        UniqueConstraint(
+            "plan_id", "room_id", "col_index", "seat_index", "bench_pos",
+            name="uq_seat_assignment_seat",
+        ),
+        UniqueConstraint(
+            "plan_id", "student_id", "offering_id",
+            name="uq_seat_assignment_candidate",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    plan_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("seating_plans.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    col_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    seat_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    bench_pos: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    student_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("students.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    offering_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("subject_offerings.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
 class OutputFile(Base):
     __tablename__ = "output_files"
 

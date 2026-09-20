@@ -7,14 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_org
 from app.database import get_db
-from app.models.db_models import Room
+from app.models.db_models import Room, SeatingPlan, SeatingPlanRoom
 from app.schemas.schemas import BlockedSeatSpec, RoomCreate, SeatColumnSpec
 
 logger = logging.getLogger(__name__)
 # Backs the room library (§15.1) — CRUD plus the "generate N identical
-# rooms" dialog. Deleting a room that's used by a published seating plan is
-# meant to be refused (409, deactivate instead) once SeatingPlanRoom exists
-# (F04) — nothing references a Room yet, so there is nothing to check.
+# rooms" dialog. Deleting a room used by a seating plan is refused with 409
+# (deactivate instead) now that SeatingPlanRoom exists — see delete_room.
 router = APIRouter(prefix="/rooms", tags=["rooms"], dependencies=[Depends(require_org)])
 
 
@@ -207,7 +206,28 @@ async def delete_room(
     room_id: str, org_id: str = Depends(require_org), db: AsyncSession = Depends(get_db)
 ):
     room = await _get_room(room_id, org_id, db)
-    # TODO(F04): refuse with 409 (deactivate instead) once SeatingPlanRoom
-    # exists and this room could actually be referenced by a published plan.
+    # F04 resolved this router's TODO: SeatingPlanRoom now exists, so a room
+    # CAN be referenced by a plan. §15.1 — a room in use is deactivated,
+    # never deleted. Checked here rather than left to the FK's ON DELETE
+    # RESTRICT for two reasons: SQLite does not enforce foreign keys unless
+    # the pragma is on (so the delete would silently orphan the plan's
+    # seats), and on Postgres it would surface as a 500 instead of a
+    # message saying what to do instead.
+    used_by = (
+        await db.execute(
+            select(SeatingPlan.version)
+            .join(SeatingPlanRoom, SeatingPlanRoom.plan_id == SeatingPlan.id)
+            .where(SeatingPlanRoom.room_id == room_id)
+            .order_by(SeatingPlan.version)
+        )
+    ).scalars().all()
+    if used_by:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{room.name} is used by {len(used_by)} seating plan(s) and "
+                "cannot be deleted — deactivate it instead"
+            ),
+        )
     await db.delete(room)
     await db.commit()
