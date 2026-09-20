@@ -92,17 +92,20 @@ def main() -> None:
         "MODEL GATE (.claude/hooks/opus_gate.py). This prompt touches work "
         f"designated Opus-only in FUTURE_UNIFIED.md §21: {named}\n"
         f"{detail}\n\n"
-        "Before writing any code for this task, STOP and ask the user "
-        "explicitly whether to continue on the current model or switch to "
-        "Opus (/model opus). Ask once, state which task triggered this and "
-        "why it is designated, then wait for the answer. If the user has "
-        "already answered for this task in this session, proceed on their "
+        "Before writing any code for this task, STOP and tell the user this "
+        "task is designated Opus-only, naming which one and why. You CANNOT "
+        "switch the model yourself and neither can this hook — only the user "
+        "can, by typing /model opus. So ask them to either switch now and "
+        "re-send the prompt, or say explicitly that they want to proceed on "
+        "the current model. Do not start the work until they answer. If they "
+        "have already answered for this task in this session, honour that "
         "choice without asking again."
     )
 
     print(json.dumps({
         "systemMessage": f"Model gate: {named} is designated Opus-only (§21). "
-                         "Claude will ask before proceeding.",
+                         "Switch with /model opus — this hook cannot switch it "
+                         "for you.",
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": context,
